@@ -1,0 +1,11 @@
+// lib/reader/reader_page.dart  (PATCH) — use Prefs.saveMarkerTyped(chapId, index)
+...
+// inside _saveBookmarkAt:
+  Future<void> _saveBookmarkAt(Offset pos, Size size) async {
+    final idx = _charIndexFromPosition(pos, size);
+    if (idx == null) return;
+    await Prefs.saveMarkerTyped(widget.chapter.id, idx);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已記錄閱讀位置')));
+  }
+...

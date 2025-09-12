@@ -1,0 +1,9 @@
+.dart_tool/
+build/
+android/.gradle/
+android/.idea/
+android/local.properties
+android/app/my-release-key.jks
+android/key.properties
+*.apk
+*.aab

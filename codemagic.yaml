@@ -1,0 +1,39 @@
+workflows:
+  android_debug_with_tests:
+    name: Android Debug with Preflight
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    triggering:
+      events: [ push, pull_request ]
+      branch_patterns:
+        - pattern: "*"
+          include: true
+          source: true
+    environment:
+      flutter: stable
+      java: 17
+      vars:
+        ANDROID_SDK_ROOT: $HOME/Library/Android/sdk
+    cache:
+      cache_paths:
+        - $FLUTTER_ROOT/.pub-cache
+        - ~/.gradle/caches
+        - ~/.gradle/wrapper
+    scripts:
+      - name: Flutter version
+        script: flutter --version
+      - name: Accept licenses & install SDK bits
+        script: |
+          yes | sdkmanager --licenses
+          sdkmanager "build-tools;35.0.0" "platforms;android-35" "ndk;27.0.12077973"
+      - name: Pub get
+        script: flutter pub get
+      - name: Analyze
+        script: flutter analyze
+      - name: Run widget tests
+        script: flutter test
+      - name: Build debug APK
+        script: flutter build apk --debug
+    artifacts:
+      - build/app/outputs/flutter-apk/app-debug.apk
+      - build/**/reports/tests/**
