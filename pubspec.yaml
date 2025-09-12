@@ -16,13 +16,13 @@ dependencies:
   sqflite: ^2.3.3+1
   shared_preferences: ^2.2.3
   path: ^1.9.0
+  flutter_launcher_icons: ^0.14.4
 
 dev_dependencies:
   sqflite_common_ffi: ^2.3.3
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.2
-  flutter_launcher_icons: ^0.13.1   # ← 加在同一個 dev_dependencies 裡
 
 flutter:
   uses-material-design: true
@@ -34,3 +34,5 @@ flutter_icons:
   android: true
   ios: false
   image_path: assets/icon/app_icon.png
+
+
