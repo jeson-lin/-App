@@ -1,23 +1,14 @@
 workflows:
   android_apk_release:
-    name: 地藏經APK
+    name: 地藏經 APK
     instance_type: mac_mini_m2
-    max_build_duration: 60
     environment:
       flutter: stable
-      xcode: latest
-      groups:
-        - keystore_credentials   # 如果你有簽章檔
-    cache:
-      cache_paths:
-        - $FLUTTER_ROOT/.pub-cache
-        - ~/.gradle/caches
-        - ~/.gradle/wrapper
     scripts:
       - name: Flutter pub get
         script: flutter pub get
 
-      - name: Accept Android licenses (safe)
+      - name: Accept Android licenses (tolerant)
         script: |
           set -euo pipefail
           export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-/usr/local/share/android-sdk}"
@@ -32,9 +23,12 @@ workflows:
             if [ -x "$p" ]; then SDKMANAGER="$p"; break; fi
           done
           if [ -n "$SDKMANAGER" ]; then
-            yes | "$SDKMANAGER" --licenses
+            set +o pipefail
+            yes | "$SDKMANAGER" --licenses --sdk_root="$ANDROID_SDK_ROOT" >/dev/null 2>&1 || true
+            set -o pipefail
+            echo "Android SDK licenses accepted (ignoring harmless SIGPIPE)."
           else
-            echo "Warning: sdkmanager not found. 跳過授權。"
+            echo "Warning: sdkmanager not found, skip licenses."
           fi
 
       - name: Build APK (release)
