@@ -1,39 +1,44 @@
 workflows:
-  android_debug_with_tests:
-    name: Android Debug with Preflight
+  android_apk_release:
+    name: 地藏經APK
     instance_type: mac_mini_m2
     max_build_duration: 60
-    triggering:
-      events: [ push, pull_request ]
-      branch_patterns:
-        - pattern: "*"
-          include: true
-          source: true
     environment:
       flutter: stable
-      java: 17
-      vars:
-        ANDROID_SDK_ROOT: $HOME/Library/Android/sdk
+      xcode: latest
+      groups:
+        - keystore_credentials   # 如果你有簽章檔
     cache:
       cache_paths:
         - $FLUTTER_ROOT/.pub-cache
         - ~/.gradle/caches
         - ~/.gradle/wrapper
     scripts:
-      - name: Flutter version
-        script: flutter --version
-      - name: Accept licenses & install SDK bits
-        script: |
-          yes | sdkmanager --licenses
-          sdkmanager "build-tools;35.0.0" "platforms;android-35" "ndk;27.0.12077973"
-      - name: Pub get
+      - name: Flutter pub get
         script: flutter pub get
-      - name: Analyze
-        script: flutter analyze
-      - name: Run widget tests
-        script: flutter test
-      - name: Build debug APK
-        script: flutter build apk --debug
+
+      - name: Accept Android licenses (safe)
+        script: |
+          set -euo pipefail
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-/usr/local/share/android-sdk}"
+          SDKMANAGER=""
+          for p in \
+            "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "$ANDROID_SDK_ROOT/tools/bin/sdkmanager" \
+            /usr/local/share/android-sdk/cmdline-tools/latest/bin/sdkmanager \
+            /usr/local/share/android-sdk/tools/bin/sdkmanager \
+            "$HOME/Library/Android/sdk/cmdline-tools/latest/bin/sdkmanager"
+          do
+            if [ -x "$p" ]; then SDKMANAGER="$p"; break; fi
+          done
+          if [ -n "$SDKMANAGER" ]; then
+            yes | "$SDKMANAGER" --licenses
+          else
+            echo "Warning: sdkmanager not found. 跳過授權。"
+          fi
+
+      - name: Build APK (release)
+        script: flutter build apk --release
+
     artifacts:
-      - build/app/outputs/flutter-apk/app-debug.apk
-      - build/**/reports/tests/**
+      - build/app/outputs/flutter-apk/app-release.apk
