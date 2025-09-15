@@ -32,7 +32,7 @@ flutter:
 # ← 這個區塊在根層，不是在 dev_dependencies 裡！
 flutter_icons:
   android: true
-  ios: false
+  ios: true
   image_path: assets/icon/app_icon.png
 
 
