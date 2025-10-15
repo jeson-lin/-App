@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:auto_size_text/auto_size_text.dart';
+import 'dart:convert';
 
 import '../services/dao.dart';
 import '../services/dao_extensions.dart';
 import '../services/prefs.dart';
+import '../services/cache_store.dart';
 import 'horizontal_typesetter.dart';
 import 'horizontal_page_painter.dart';
+
+enum PageCounterMode { chapter, volume, global }
 
 class SutraReaderPage extends StatefulWidget {
   const SutraReaderPage({
@@ -24,6 +28,7 @@ class SutraReaderPage extends StatefulWidget {
 }
 
 class _SutraReaderPageState extends State<SutraReaderPage> {
+  PageCounterMode _counterMode = PageCounterMode.chapter;
   // 章索引
   late int _idx;
 
@@ -31,6 +36,13 @@ class _SutraReaderPageState extends State<SutraReaderPage> {
   String _text = '';
   late PageController _pc;
   late List<dynamic> _pages; // 需有 .start/.end
+  int _pageIndex = 0;
+  List<({String chapId, int pages})>? _volChapterPageCounts;
+  int _volTotalPages = 0;
+  int _volPageIndex = 0;
+  List<({String chapId, int pages})>? _allChapterPageCounts;
+  int _globalTotalPages = 0;
+  int _globalPageIndex = 0;
 
   // 外觀設定
   double _fontSize = 18;
@@ -100,11 +112,141 @@ class _SutraReaderPageState extends State<SutraReaderPage> {
       _lastEffectivePadding = effectivePadding;
     });
     if (resetToFirstPage && _pc.hasClients) {
+      _pageIndex = 0;
+      _updateVolumeIndex();
+      _updateGlobalIndex();
+      _computeVolumePageCounts(size, effectivePadding);
+      _computeGlobalPageCounts(size, effectivePadding);
       _pc.jumpToPage(0);
     }
   }
 
-  void _changeFont(double delta) {
+  
+  Future<String?> _currentVolumeId() async {
+    final chap = widget.fullChapters[_idx];
+    final rows = await widget.dao.db.rawQuery('SELECT vol_id AS volId FROM chapters WHERE chap_id = ? LIMIT 1', [chap.chapId]);
+    if (rows.isEmpty) return null;
+    return (rows.first['volId'] ?? '').toString();
+  }
+
+  String _layoutKey(Size size, EdgeInsets padding) {
+    final w = size.width.toStringAsFixed(1);
+    final h = size.height.toStringAsFixed(1);
+    final l = padding.left.toStringAsFixed(1);
+    final t = padding.top.toStringAsFixed(1);
+    final r = padding.right.toStringAsFixed(1);
+    final b = padding.bottom.toStringAsFixed(1);
+    return 'f=$_fontSize|${w}x${h}|p=$l,$t,$r,$b';
+  }
+  String _globalCacheKey(Size size, EdgeInsets padding) => 'global_pages_v1|' + _layoutKey(size, padding);
+  Future<String> _volumeCacheKey(Size size, EdgeInsets padding) async {
+    final volId = await _currentVolumeId() ?? 'unknown';
+    return 'volume_pages_v1|vol=$volId|' + _layoutKey(size, padding);
+  }
+
+  Future<void> _computeGlobalPageCounts(Size size, EdgeInsets padding) async {
+    final key = _globalCacheKey(size, padding);
+    final cached = await CacheStore.readJson(key);
+    if (cached != null) {
+      try {
+        final arr = (cached['chapters'] as List).cast<Map>();
+        final cps = <({String chapId, int pages})>[];
+        for (final e in arr) {
+          cps.add((chapId: (e['chapId'] ?? '').toString(), pages: (e['pages'] as num).toInt()));
+        }
+        final total = (cached['total'] as num).toInt();
+        if (mounted) {
+          setState(() { _allChapterPageCounts = cps; _globalTotalPages = total; });
+          _updateGlobalIndex();
+          return;
+        }
+      } catch (_) {}
+    }
+    final vols = await widget.dao.listVolumes();
+    final style = TextStyle(fontSize: _fontSize, height: 1.4);
+    final cps = <({String chapId, int pages})>[];
+    for (final v in vols) {
+      final chapters = await widget.dao.listChaptersByVolume(v.volId);
+      for (final ch in chapters) {
+        final text = await widget.dao.loadChapterText(ch.chapId);
+        final ts = HorizontalTypesetter(text: text, style: style, padding: padding);
+        final pages = ts.paginate(size).length;
+        cps.add((chapId: ch.chapId, pages: pages));
+      }
+    }
+    final total = cps.fold(0, (a,b)=>a+b.pages);
+    if (!mounted) return;
+    setState(() { _allChapterPageCounts = cps; _globalTotalPages = total; });
+    _updateGlobalIndex();
+    await CacheStore.writeJson(key, {
+      'chapters': [ for (final e in cps) {'chapId': e.chapId, 'pages': e.pages} ],
+      'total': total,
+      'ts': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  Future<void> _computeVolumePageCounts(Size size, EdgeInsets padding) async {
+    final key = await _volumeCacheKey(size, padding);
+    final cached = await CacheStore.readJson(key);
+    if (cached != null) {
+      try {
+        final arr = (cached['chapters'] as List).cast<Map>();
+        final cps = <({String chapId, int pages})>[];
+        for (final e in arr) {
+          cps.add((chapId: (e['chapId'] ?? '').toString(), pages: (e['pages'] as num).toInt()));
+        }
+        final total = (cached['total'] as num).toInt();
+        if (mounted) {
+          setState(() { _volChapterPageCounts = cps; _volTotalPages = total; });
+          _updateVolumeIndex();
+          return;
+        }
+      } catch (_) {}
+    }
+    final volId = await _currentVolumeId();
+    if (volId == null) return;
+    final chapters = await widget.dao.listChaptersByVolume(volId);
+    final style = TextStyle(fontSize: _fontSize, height: 1.4);
+    final cps = <({String chapId, int pages})>[];
+    for (final ch in chapters) {
+      final text = await widget.dao.loadChapterText(ch.chapId);
+      final ts = HorizontalTypesetter(text: text, style: style, padding: padding);
+      final pages = ts.paginate(size).length;
+      cps.add((chapId: ch.chapId, pages: pages));
+    }
+    final total = cps.fold(0, (a,b)=>a+b.pages);
+    if (!mounted) return;
+    setState(() { _volChapterPageCounts = cps; _volTotalPages = total; });
+    _updateVolumeIndex();
+    await CacheStore.writeJson(key, {
+      'chapters': [ for (final e in cps) {'chapId': e.chapId, 'pages': e.pages} ],
+      'total': total,
+      'ts': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  void _updateVolumeIndex() {
+    if (_volChapterPageCounts == null) return;
+    final currentChapId = widget.fullChapters[_idx].chapId;
+    int prefix = 0;
+    for (final cp in _volChapterPageCounts!) {
+      if (cp.chapId == currentChapId) break;
+      prefix += cp.pages;
+    }
+    _volPageIndex = prefix + _pageIndex;
+  }
+
+  void _updateGlobalIndex() {
+    if (_allChapterPageCounts == null) return;
+    final currentChapId = widget.fullChapters[_idx].chapId;
+    int prefix = 0;
+    for (final cp in _allChapterPageCounts!) {
+      if (cp.chapId == currentChapId) break;
+      prefix += cp.pages;
+    }
+    _globalPageIndex = prefix + _pageIndex;
+  }
+void _changeFont(double delta) {
     final next = (_fontSize + delta).clamp(14.0, 36.0);
     setState(() => _fontSize = next);
     Prefs.saveFontSize(next);
@@ -214,10 +356,45 @@ class _SutraReaderPageState extends State<SutraReaderPage> {
       appBar: AppBar(
         title: AutoSizeText(title, maxLines: 1, minFontSize: 12, overflow: TextOverflow.ellipsis),
         actions: [
-          IconButton(icon: const Icon(Icons.text_decrease), onPressed: () => _changeFont(-2), tooltip: '縮小字體'),
-          IconButton(icon: const Icon(Icons.text_increase), onPressed: () => _changeFont(2), tooltip: '放大字體'),
-          IconButton(icon: const Icon(Icons.palette), onPressed: _showSettingsSheet, tooltip: '外觀設定'),
-        ],
+      GestureDetector(
+        onTap: () {
+          setState(() {
+            _counterMode = _counterMode == PageCounterMode.chapter
+              ? PageCounterMode.volume
+              : _counterMode == PageCounterMode.volume
+                ? PageCounterMode.global
+                : PageCounterMode.chapter;
+          });
+        },
+        child: Padding(
+          padding: const EdgeInsets.only(right: 12),
+          child: Center(
+            child: Builder(
+              builder: (context) {
+                String label;
+                switch (_counterMode) {
+                  case PageCounterMode.chapter:
+                    label = '${_pageIndex + 1}/${_pages.length}';
+                    break;
+                  case PageCounterMode.volume:
+                    label = (_volTotalPages > 0)
+                      ? '${_volPageIndex + 1}/${_volTotalPages}'
+                      : '…/…';
+                    break;
+                  case PageCounterMode.global:
+                    label = (_globalTotalPages > 0)
+                      ? '${_globalPageIndex + 1}/${_globalTotalPages}'
+                      : '…/…';
+                    break;
+                }
+                return Text(label, style: Theme.of(context).textTheme.labelLarge);
+              },
+            ),
+          ),
+        ),
+      ),
+      IconButton(icon: const Icon(Icons.palette), onPressed: _showSettingsSheet, tooltip: '外觀設定'),
+    ],
       ),
       body: LayoutBuilder(
         builder: (c, bc) {
@@ -243,7 +420,9 @@ class _SutraReaderPageState extends State<SutraReaderPage> {
             child: PageView.builder(
               key: ValueKey<int>(_idx),
               controller: _pc,
-              scrollDirection: Axis.vertical, // 章內上下翻頁
+              scrollDirection: Axis.vertical,
+              onPageChanged: (i) { setState(() { _pageIndex = i; _updateVolumeIndex(); _updateGlobalIndex(); }); },
+              // 章內上下翻頁
               itemCount: _pages.length,
               itemBuilder: (c, i) {
                 final pr = _pages[i] as dynamic;
