@@ -112,16 +112,12 @@ class _SutraReaderPageState extends State<SutraReaderPage> {
       _lastEffectivePadding = effectivePadding;
     });
     if (resetToFirstPage && _pc.hasClients) {
-      _pageIndex = 0;
-      _updateVolumeIndex();
-      _updateGlobalIndex();
-      _computeVolumePageCounts(size, effectivePadding);
-      _computeGlobalPageCounts(size, effectivePadding);
       _pc.jumpToPage(0);
     }
   }
 
   
+
   Future<String?> _currentVolumeId() async {
     final chap = widget.fullChapters[_idx];
     final rows = await widget.dao.db.rawQuery('SELECT vol_id AS volId FROM chapters WHERE chap_id = ? LIMIT 1', [chap.chapId]);
@@ -246,6 +242,98 @@ class _SutraReaderPageState extends State<SutraReaderPage> {
     }
     _globalPageIndex = prefix + _pageIndex;
   }
+
+  Future<void> _showCatalog() async {
+    final vols = await widget.dao.listVolumes();
+    if (!mounted) return;
+    String? currentVolId = await _currentVolumeId();
+    int volIndex = currentVolId == null ? 0 : vols.indexWhere((v) => v.volId == currentVolId);
+    if (volIndex < 0) volIndex = 0;
+    List<({String chapId, String title, String volId, int ord})> chapters = await widget.dao.listChaptersByVolume(vols[volIndex].volId);
+
+    await showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return SizedBox(
+          height: MediaQuery.of(ctx).size.height * 0.75,
+          child: StatefulBuilder(
+            builder: (ctx, setSheet) {
+              return Row(
+                children: [
+                  SizedBox(
+                    width: 160,
+                    child: ListView.separated(
+                      itemCount: vols.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (_, i) {
+                        final v = vols[i];
+                        final selected = i == volIndex;
+                        return ListTile(
+                          title: Text(v.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                          selected: selected,
+                          onTap: () async {
+                            volIndex = i;
+                            chapters = await widget.dao.listChaptersByVolume(v.volId);
+                            setSheet((){});
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                  const VerticalDivider(width: 1),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: chapters.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (_, i) {
+                        final c = chapters[i];
+                        return ListTile(
+                          title: Text(c.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                          onTap: () {
+                            Navigator.of(ctx).pop();
+                            _openSpecificVolume(vols[volIndex].volId, i);
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _openSpecificVolume(String volId, int chapterIndex) async {
+    final chs = await widget.dao.listChaptersByVolume(volId);
+    if (chs.isEmpty || !mounted) return;
+    final list = chs.map((e) => (chapId: e.chapId, title: e.title)).toList();
+    Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) {
+      return SutraReaderPage(dao: widget.dao, fullChapters: list, chapterIndex: chapterIndex);
+    }));
+  }
+
+  Future<void> _openAdjacentVolume({required bool next}) async {
+    final curVol = await _currentVolumeId();
+    if (curVol == null) return;
+    final vols = await widget.dao.listVolumes();
+    final i = vols.indexWhere((v) => v.volId == curVol);
+    if (i < 0) return;
+    final t = next ? i + 1 : i - 1;
+    if (t < 0 || t >= vols.length) return;
+    final targetVolId = vols[t].volId;
+    final targetChaps = await widget.dao.listChaptersByVolume(targetVolId);
+    if (!mounted || targetChaps.isEmpty) return;
+    final list = targetChaps.map((e) => (chapId: e.chapId, title: e.title)).toList();
+    final startIndex = next ? 0 : (list.length - 1);
+    Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) {
+      return SutraReaderPage(dao: widget.dao, fullChapters: list, chapterIndex: startIndex);
+    }));
+  }
 void _changeFont(double delta) {
     final next = (_fontSize + delta).clamp(14.0, 36.0);
     setState(() => _fontSize = next);
@@ -256,14 +344,34 @@ void _changeFont(double delta) {
   }
 
   // 左右換章（沿用你原本的體感：以速度判斷）
-  void _onHorizontalSwipe(DragEndDetails d) {
+  
+  void _onHorizontalSwipe(DragEndDetails d) async {
     final v = d.primaryVelocity ?? 0;
     const threshold = 600;
+
+    final bool isLastPageInChapter = _pageIndex >= _pages.length - 1;
+    final bool isFirstPageInChapter = _pageIndex <= 0;
+    final bool isLastChapterInVolume = _idx >= widget.fullChapters.length - 1;
+    final bool isFirstChapterInVolume = _idx == 0;
+
     if (v > threshold) {
-      _openChapter(_idx + 1); // 右滑 → 下一章
+      if (isLastChapterInVolume && isLastPageInChapter) {
+        await _openAdjacentVolume(next: true);
+      } else if (!isLastChapterInVolume && isLastPageInChapter) {
+        _openChapter(_idx + 1);
+      } else {
+        // do nothing
+      }
     } else if (v < -threshold) {
-      _openChapter(_idx - 1); // 左滑 → 上一章
+      if (isFirstChapterInVolume && isFirstPageInChapter) {
+        await _openAdjacentVolume(next: false);
+      } else if (!isFirstChapterInVolume && isFirstPageInChapter) {
+        _openChapter(_idx - 1);
+      } else {
+        // do nothing
+      }
     }
+  }
   }
 
   void _openChapter(int newIndex) {
@@ -354,47 +462,46 @@ void _changeFont(double delta) {
     return Scaffold(
       backgroundColor: bg,
       appBar: AppBar(
-        title: AutoSizeText(title, maxLines: 1, minFontSize: 12, overflow: TextOverflow.ellipsis),
+        leading: IconButton(icon: const Icon(Icons.menu_book), tooltip: '目錄', onPressed: _showCatalog),
+        title: InkWell(onTap: _showCatalog, child: AutoSizeText(title, maxLines: 1, minFontSize: 12, overflow: TextOverflow.ellipsis)),
+        
         actions: [
-      GestureDetector(
-        onTap: () {
-          setState(() {
-            _counterMode = _counterMode == PageCounterMode.chapter
-              ? PageCounterMode.volume
-              : _counterMode == PageCounterMode.volume
-                ? PageCounterMode.global
-                : PageCounterMode.chapter;
-          });
-        },
-        child: Padding(
-          padding: const EdgeInsets.only(right: 12),
-          child: Center(
-            child: Builder(
-              builder: (context) {
-                String label;
-                switch (_counterMode) {
-                  case PageCounterMode.chapter:
-                    label = '${_pageIndex + 1}/${_pages.length}';
-                    break;
-                  case PageCounterMode.volume:
-                    label = (_volTotalPages > 0)
-                      ? '${_volPageIndex + 1}/${_volTotalPages}'
-                      : '…/…';
-                    break;
-                  case PageCounterMode.global:
-                    label = (_globalTotalPages > 0)
-                      ? '${_globalPageIndex + 1}/${_globalTotalPages}'
-                      : '…/…';
-                    break;
-                }
-                return Text(label, style: Theme.of(context).textTheme.labelLarge);
-              },
+          GestureDetector(
+            onTap: () {
+              setState(() {
+                _counterMode = _counterMode == PageCounterMode.chapter
+                  ? PageCounterMode.volume
+                  : _counterMode == PageCounterMode.volume
+                    ? PageCounterMode.global
+                    : PageCounterMode.chapter;
+              });
+            },
+            child: Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: Center(
+                child: Builder(
+                  builder: (context) {
+                    String label;
+                    switch (_counterMode) {
+                      case PageCounterMode.chapter:
+                        label = '${_pageIndex + 1}/${_pages.length}';
+                        break;
+                      case PageCounterMode.volume:
+                        label = (_volTotalPages > 0) ? '${_volPageIndex + 1}/${_volTotalPages}' : '…/…';
+                        break;
+                      case PageCounterMode.global:
+                        label = (_globalTotalPages > 0) ? '${_globalPageIndex + 1}/${_globalTotalPages}' : '…/…';
+                        break;
+                    }
+                    return Text(label, style: Theme.of(context).textTheme.labelLarge);
+                  },
+                ),
+              ),
             ),
           ),
-        ),
-      ),
-      IconButton(icon: const Icon(Icons.palette), onPressed: _showSettingsSheet, tooltip: '外觀設定'),
-    ],
+          IconButton(icon: const Icon(Icons.palette), onPressed: _showSettingsSheet, tooltip: '外觀設定'),
+        ],
+
       ),
       body: LayoutBuilder(
         builder: (c, bc) {
@@ -420,9 +527,7 @@ void _changeFont(double delta) {
             child: PageView.builder(
               key: ValueKey<int>(_idx),
               controller: _pc,
-              scrollDirection: Axis.vertical,
-              onPageChanged: (i) { setState(() { _pageIndex = i; _updateVolumeIndex(); _updateGlobalIndex(); }); },
-              // 章內上下翻頁
+              scrollDirection: Axis.vertical, // 章內上下翻頁
               itemCount: _pages.length,
               itemBuilder: (c, i) {
                 final pr = _pages[i] as dynamic;
