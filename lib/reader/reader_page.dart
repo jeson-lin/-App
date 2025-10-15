@@ -57,6 +57,8 @@ class _SutraReaderPageState extends State<SutraReaderPage> {
   @override
   void initState() {
     super.initState();
+    _pc = PageController();
+    _pages = const [];
     _idx = widget.chapterIndex;
     _pc = PageController();
     _pages = const [];
@@ -241,7 +243,14 @@ Future<void> _openAdjacentVolume({required bool next}) async {
   }));
 }
 
+
+@override
+void dispose() {
+  _pc.dispose();
+  super.dispose();
 }
+}
+
 
 
   void _openChapter(int newIndex) {
@@ -394,7 +403,8 @@ appBar: AppBar(
           return GestureDetector(
             onHorizontalDragEnd: _onHorizontalSwipe, // 左右換章
             child: PageView.builder(
-              key: ValueKey<int>(_idx),
+              key: ValueKey<int>(_idx,
+              onPageChanged: (i) => setState(() => _pageIndex = i)),
               controller: _pc,
               scrollDirection: Axis.vertical, // 章內上下翻頁
               itemCount: _pages.length,
