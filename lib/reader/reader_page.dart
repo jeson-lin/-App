@@ -141,7 +141,108 @@ void _onHorizontalSwipe(DragEndDetails d) async {
 } else if (v < -threshold) {
       _openChapter(_idx - 1); // 左滑 → 上一章
     }
-  }
+  
+Future<void> _showCatalog() async {
+  final vols = await widget.dao.listVolumes();
+  if (!mounted) return;
+  String? currentVolId = await _currentVolumeId();
+  int volIndex = currentVolId == null ? 0 : vols.indexWhere((v) => v.volId == currentVolId);
+  if (volIndex < 0) volIndex = 0;
+  var chapters = await widget.dao.listChaptersByVolume(vols[volIndex].volId);
+
+  await showModalBottomSheet(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (ctx) {
+      return SizedBox(
+        height: MediaQuery.of(ctx).size.height * 0.75,
+        child: StatefulBuilder(
+          builder: (ctx, setSheet) {
+            return Row(
+              children: [
+                SizedBox(
+                  width: 160,
+                  child: ListView.separated(
+                    itemCount: vols.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (_, i) {
+                      final v = vols[i];
+                      final selected = i == volIndex;
+                      return ListTile(
+                        title: Text(v.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                        selected: selected,
+                        onTap: () async {
+                          volIndex = i;
+                          chapters = await widget.dao.listChaptersByVolume(v.volId);
+                          setSheet((){});
+                        },
+                      );
+                    },
+                  ),
+                ),
+                const VerticalDivider(width: 1),
+                Expanded(
+                  child: ListView.separated(
+                    itemCount: chapters.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (_, i) {
+                      final c = chapters[i];
+                      return ListTile(
+                        title: Text(c.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                        onTap: () {
+                          Navigator.of(ctx).pop();
+                          _openSpecificVolume(vols[volIndex].volId, i);
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      );
+    },
+  );
+}
+
+Future<void> _openSpecificVolume(String volId, int chapterIndex) async {
+  final chs = await widget.dao.listChaptersByVolume(volId);
+  if (chs.isEmpty || !mounted) return;
+  final list = chs.map((e) => (chapId: e.chapId, title: e.title)).toList();
+  Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) {
+    return SutraReaderPage(dao: widget.dao, fullChapters: list, chapterIndex: chapterIndex);
+  }));
+}
+
+Future<String?> _currentVolumeId() async {
+  final chap = widget.fullChapters[_idx];
+  final rows = await widget.dao.db.rawQuery('SELECT vol_id AS volId FROM chapters WHERE chap_id = ? LIMIT 1', [chap.chapId]);
+  if (rows.isEmpty) return null;
+  return (rows.first['volId'] ?? '').toString();
+}
+
+Future<void> _openAdjacentVolume({required bool next}) async {
+  final curVol = await _currentVolumeId();
+  if (curVol == null) return;
+  final vols = await widget.dao.listVolumes();
+  final i = vols.indexWhere((v) => v.volId == curVol);
+  if (i < 0) return;
+  final t = next ? i + 1 : i - 1;
+  if (t < 0 || t >= vols.length) return;
+  final targetVolId = vols[t].volId;
+  final targetChaps = await widget.dao.listChaptersByVolume(targetVolId);
+  if (!mounted || targetChaps.isEmpty) return;
+  final list = targetChaps.map((e) => (chapId: e.chapId, title: e.title)).toList();
+  final startIndex = next ? 0 : (list.length - 1);
+  Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) {
+    return SutraReaderPage(dao: widget.dao, fullChapters: list, chapterIndex: startIndex);
+  }));
+}
+
+}
+
 
   void _openChapter(int newIndex) {
     if (newIndex < 0 || newIndex >= widget.fullChapters.length) return;
@@ -315,104 +416,5 @@ appBar: AppBar(
       ),
     );
   }
-
-Future<void> _showCatalog() async {
-  final vols = await widget.dao.listVolumes();
-  if (!mounted) return;
-  String? currentVolId = await _currentVolumeId();
-  int volIndex = currentVolId == null ? 0 : vols.indexWhere((v) => v.volId == currentVolId);
-  if (volIndex < 0) volIndex = 0;
-  var chapters = await widget.dao.listChaptersByVolume(vols[volIndex].volId);
-
-  await showModalBottomSheet(
-    context: context,
-    showDragHandle: true,
-    isScrollControlled: true,
-    builder: (ctx) {
-      return SizedBox(
-        height: MediaQuery.of(ctx).size.height * 0.75,
-        child: StatefulBuilder(
-          builder: (ctx, setSheet) {
-            return Row(
-              children: [
-                SizedBox(
-                  width: 160,
-                  child: ListView.separated(
-                    itemCount: vols.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (_, i) {
-                      final v = vols[i];
-                      final selected = i == volIndex;
-                      return ListTile(
-                        title: Text(v.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                        selected: selected,
-                        onTap: () async {
-                          volIndex = i;
-                          chapters = await widget.dao.listChaptersByVolume(v.volId);
-                          setSheet((){});
-                        },
-                      );
-                    },
-                  ),
-                ),
-                const VerticalDivider(width: 1),
-                Expanded(
-                  child: ListView.separated(
-                    itemCount: chapters.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (_, i) {
-                      final c = chapters[i];
-                      return ListTile(
-                        title: Text(c.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                        onTap: () {
-                          Navigator.of(ctx).pop();
-                          _openSpecificVolume(vols[volIndex].volId, i);
-                        },
-                      );
-                    },
-                  ),
-                ),
-              ],
-            );
-          },
-        ),
-      );
-    },
-  );
-}
-
-Future<void> _openSpecificVolume(String volId, int chapterIndex) async {
-  final chs = await widget.dao.listChaptersByVolume(volId);
-  if (chs.isEmpty || !mounted) return;
-  final list = chs.map((e) => (chapId: e.chapId, title: e.title)).toList();
-  Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) {
-    return SutraReaderPage(dao: widget.dao, fullChapters: list, chapterIndex: chapterIndex);
-  }));
-}
-
-Future<String?> _currentVolumeId() async {
-  final chap = widget.fullChapters[_idx];
-  final rows = await widget.dao.db.rawQuery('SELECT vol_id AS volId FROM chapters WHERE chap_id = ? LIMIT 1', [chap.chapId]);
-  if (rows.isEmpty) return null;
-  return (rows.first['volId'] ?? '').toString();
-}
-
-Future<void> _openAdjacentVolume({required bool next}) async {
-  final curVol = await _currentVolumeId();
-  if (curVol == null) return;
-  final vols = await widget.dao.listVolumes();
-  final i = vols.indexWhere((v) => v.volId == curVol);
-  if (i < 0) return;
-  final t = next ? i + 1 : i - 1;
-  if (t < 0 || t >= vols.length) return;
-  final targetVolId = vols[t].volId;
-  final targetChaps = await widget.dao.listChaptersByVolume(targetVolId);
-  if (!mounted || targetChaps.isEmpty) return;
-  final list = targetChaps.map((e) => (chapId: e.chapId, title: e.title)).toList();
-  final startIndex = next ? 0 : (list.length - 1);
-  Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) {
-    return SutraReaderPage(dao: widget.dao, fullChapters: list, chapterIndex: startIndex);
-  }));
-}
 
 }
