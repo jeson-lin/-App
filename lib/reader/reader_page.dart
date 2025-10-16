@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import '../services/cache_store.dart';
 import 'horizontal_typesetter.dart';
