@@ -1,42 +1,57 @@
 
 import 'package:flutter/material.dart';
-import '../services/dao.dart';
 import '../services/cache_store.dart';
+import 'horizontal_typesetter.dart' as ht;
+import 'horizontal_page_painter.dart' as hp;
 
-/// Compatible with your original data model:
-/// - constructor: SutraDao dao, List<({String chapId, String title})> fullChapters, int chapterIndex
-/// - loads text via dao.loadChapterText(chapId)
-/// - keeps features: vertical paging, edge-swipe chapter switch, catalog, last-read, stats, settings
+/// Reader page (horizontal typeset integration)
+/// - Real pagination using HorizontalTypesetter + HorizontalPagePainter
+/// - Horizontal page turning (left/right)
+/// - Edge swipe at first/last page switches chapters
+/// - Catalog to jump chapters
+/// - Last-read per chapter; reading stats; appearance settings
 class SutraReaderPage extends StatefulWidget {
-  const SutraReaderPage({
-    super.key,
-    required this.dao,
-    required this.fullChapters, // List<({String chapId, String title})>
-    required this.chapterIndex,
-  });
-
-  final SutraDao dao;
-  final List<({String chapId, String title})> fullChapters;
+  final dynamic dao;
+  /// Chapters are records like: ({String chapId, String title})
+  final List<dynamic> fullChapters;
   final int chapterIndex;
+
+  const SutraReaderPage({
+    Key? key,
+    required this.dao,
+    required this.fullChapters,
+    required this.chapterIndex,
+  }) : super(key: key);
 
   @override
   State<SutraReaderPage> createState() => _SutraReaderPageState();
 }
 
 class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingObserver {
+  // chapter index
   late int _idx;
-  late PageController _pc;
-  String _text = '';
-  List<TextRange> _pages = <TextRange>[];
-  int _pageIndex = 0;
 
-  // prefs
+  // paging
+  late PageController _pc;
+  int _pageIndex = 0;
+  List<TextRange> _pageRanges = <TextRange>[]; // computed by typesetter
+  String _text = '';
+
+  // layout
+  Size _lastPageSize = Size.zero;
+  EdgeInsets _pagePadding = const EdgeInsets.fromLTRB(20, 28, 20, 32);
+
+  // preferences
   double _fontSize = 18;
-  int _themeMode = 0;
+  double _lineHeight = 1.6;
+  int _themeMode = 0; // 0 system, 1 light, 2 dark
   Color _bgColor = const Color(0xFFFAF6EF);
 
   // stats
   int? _lastOpenTs;
+
+  // caches
+  final Map<String, List<TextRange>> _paginationCache = {}; // key: chapId|font|size
 
   @override
   void initState() {
@@ -46,7 +61,6 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     _pc = PageController();
     _loadPrefs();
     _startSession();
-    _loadTextFor(_idx);
   }
 
   @override
@@ -64,10 +78,10 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     }
   }
 
-  // ===== Prefs =====
-  static const _kPrefs = 'reader_prefs_v1';
+  // ===== Preferences =====
+  static const String _kPrefsKey = 'reader_prefs_v1';
   Future<void> _loadPrefs() async {
-    final m = await CacheStore.readJson(_kPrefs) ?? <String, dynamic>{};
+    final m = await CacheStore.readJson(_kPrefsKey) ?? <String, dynamic>{};
     if (!mounted) return;
     setState(() {
       _fontSize = (m['fontSize'] is num) ? (m['fontSize'] as num).toDouble() : _fontSize;
@@ -75,165 +89,287 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
       if (m['bgColor'] is int) _bgColor = Color(m['bgColor'] as int);
     });
   }
+
   Future<void> _savePrefs() async {
-    await CacheStore.writeJson(_kPrefs, {'fontSize': _fontSize, 'themeMode': _themeMode, 'bgColor': _bgColor.value});
+    await CacheStore.writeJson(_kPrefsKey, {
+      'fontSize': _fontSize,
+      'themeMode': _themeMode,
+      'bgColor': _bgColor.value,
+    });
   }
 
   // ===== Stats =====
-  static const _kStats = 'reader_stats_v1';
+  static const String _kStatsKey = 'reader_stats_v1';
   Future<void> _startSession() async {
     final now = DateTime.now().millisecondsSinceEpoch;
     _lastOpenTs = now;
-    final m = await CacheStore.readJson(_kStats) ?? <String, dynamic>{'totalSeconds': 0};
+    final m = await CacheStore.readJson(_kStatsKey) ?? <String, dynamic>{'totalSeconds': 0};
     m['lastOpenTs'] = now;
-    await CacheStore.writeJson(_kStats, m);
+    await CacheStore.writeJson(_kStatsKey, m);
   }
+
   Future<void> _accumulateStats() async {
     final now = DateTime.now().millisecondsSinceEpoch;
     if (_lastOpenTs == null) return;
     int addSec = ((now - _lastOpenTs!) / 1000).round();
-    final m = await CacheStore.readJson(_kStats) ?? <String, dynamic>{'totalSeconds': 0};
+    if (addSec < 0) addSec = 0;
+    final m = await CacheStore.readJson(_kStatsKey) ?? <String, dynamic>{'totalSeconds': 0};
     m['totalSeconds'] = (m['totalSeconds'] ?? 0) + addSec;
     m['lastOpenTs'] = now;
-    await CacheStore.writeJson(_kStats, m);
+    await CacheStore.writeJson(_kStatsKey, m);
     _lastOpenTs = now;
   }
+
   Future<int> _getTotalSeconds() async {
-    final m = await CacheStore.readJson(_kStats) ?? <String, dynamic>{'totalSeconds': 0};
+    final m = await CacheStore.readJson(_kStatsKey) ?? <String, dynamic>{'totalSeconds': 0};
     return (m['totalSeconds'] ?? 0) as int;
   }
 
-  // ===== Last-read =====
+  // ===== Last-read per chapter =====
   String _lastPosKeyFor(String chapId) => 'last_pos_v1|chap=$chapId';
+
   Future<int?> _loadLastPageFor(String chapId) async {
     final m = await CacheStore.readJson(_lastPosKeyFor(chapId));
-    final p = m?['pageIndex'];
+    if (m == null) return null;
+    final p = m['pageIndex'];
     if (p is int) return p;
     if (p is num) return p.toInt();
     return null;
   }
+
   Future<void> _saveLastPageFor(String chapId, int pageIndex) async {
     await CacheStore.writeJson(_lastPosKeyFor(chapId), {'pageIndex': pageIndex});
   }
 
-  // ===== Load & paginate =====
-  Future<void> _loadTextFor(int index) async {
+  // ===== Data helpers =====
+  String _chapIdOf(dynamic rec) {
+    try { return (rec as dynamic).chapId as String; } catch (_) {}
+    if (rec is Map && rec['chapId'] is String) return rec['chapId'] as String;
+    return rec.toString();
+  }
+  String _titleOf(dynamic rec, int index) {
+    try { final t = (rec as dynamic).title as String; if (t.isNotEmpty) return t; } catch (_) {}
+    if (rec is Map && rec['title'] is String) return rec['title'] as String;
+    return '第 ${index + 1} 章';
+  }
+
+  // ===== Chapter + pagination =====
+  Future<void> _loadChapter(int index, {bool keepPage = false}) async {
     final chap = widget.fullChapters[index];
+    final chapId = _chapIdOf(chap);
+
     String t = '';
     try {
-      t = await widget.dao.loadChapterText(chap.chapId);
+      if (widget.dao != null && (widget.dao as dynamic).loadChapterText != null) {
+        final fn = (widget.dao as dynamic).loadChapterText;
+        t = await fn(chapId);
+      }
     } catch (_) {}
-    int initialPage = 0;
-    try {
-      final last = await _loadLastPageFor(chap.chapId);
-      if (last != null) initialPage = last;
-    } catch (_) {}
+
+    final int initial = keepPage ? _pageIndex : (await _loadLastPageFor(chapId)) ?? 0;
+
     if (!mounted) return;
     setState(() {
       _text = t;
-      _paginate();
-      _pageIndex = (_pages.isNotEmpty && initialPage >= 0 && initialPage < _pages.length) ? initialPage : 0;
+      _pageRanges = <TextRange>[]; // will be populated after layout pass
+      _pageIndex = 0; // temp
+      _pc = PageController(initialPage: 0);
+    });
+
+    // wait for layout then paginate
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _ensurePaginationAndJump(initial);
+    });
+  }
+
+  Future<void> _ensurePaginationAndJump(int initialPage) async {
+    if (!mounted) return;
+    final size = _lastPageSize;
+    if (size == Size.zero) return; // will be called again after first layout
+    final chap = widget.fullChapters[_idx];
+    final chapId = _chapIdOf(chap);
+
+    final cacheKey = '$chapId|${_fontSize.toStringAsFixed(1)}|${size.width.toStringAsFixed(0)}x${size.height.toStringAsFixed(0)}|${_pagePadding.toString()}';
+    if (_paginationCache.containsKey(cacheKey)) {
+      setState(() {
+        _pageRanges = _paginationCache[cacheKey]!;
+        _pageIndex = initialPage.clamp(0, (_pageRanges.length - 1).clamp(0, 1 << 30));
+        _pc = PageController(initialPage: _pageIndex);
+      });
+      return;
+    }
+
+    final style = TextStyle(fontSize: _fontSize, height: _lineHeight);
+    List<TextRange> ranges = <TextRange>[];
+    try {
+      final typesetter = ht.HorizontalTypesetter(
+        text: _text,
+        style: style,
+        padding: _pagePadding,
+      );
+      ranges = typesetter.paginate(size);
+    } catch (e) {
+      // graceful fallback: naive word-chunk pagination, so UI still works
+      ranges = _fallbackPaginate(_text, _fontSize);
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _pageRanges = ranges;
+      _paginationCache[cacheKey] = ranges;
+      _pageIndex = initialPage.clamp(0, (_pageRanges.length - 1).clamp(0, 1 << 30));
       _pc = PageController(initialPage: _pageIndex);
     });
   }
 
-  void _paginate() {
-    _pages.clear();
-    if (_text.trim().isEmpty) return;
-    final int baseChunk = 1000;
-    final double scale = 18.0 / (_fontSize <= 0 ? 18.0 : _fontSize);
-    final int chunk = (baseChunk * scale).clamp(400, 1600).toInt();
+  List<TextRange> _fallbackPaginate(String text, double fontSize) {
+    final List<TextRange> pages = [];
+    if (text.isEmpty) return pages;
+    final int base = 1000;
+    final double scale = 18.0 / (fontSize <= 0 ? 18.0 : fontSize);
+    final int chunk = (base * scale).clamp(400, 1600).toInt();
     int i = 0;
-    while (i < _text.length) {
-      final end = (i + chunk < _text.length) ? i + chunk : _text.length;
-      _pages.add(TextRange(start: i, end: end));
+    while (i < text.length) {
+      final end = (i + chunk < text.length) ? i + chunk : text.length;
+      pages.add(TextRange(start: i, end: end));
       i = end;
     }
+    return pages;
   }
 
-  // ===== Chapter switching =====
   Future<void> _openChapter(int newIndex) async {
     if (newIndex < 0 || newIndex >= widget.fullChapters.length) return;
-    final cur = widget.fullChapters[_idx];
-    await _saveLastPageFor(cur.chapId, _pageIndex);
+    // save current position
+    final curChapId = _chapIdOf(widget.fullChapters[_idx]);
+    await _saveLastPageFor(curChapId, _pageIndex);
     setState(() => _idx = newIndex);
-    await _loadTextFor(_idx);
-  }
-  void _onHorizontalSwipe(DragEndDetails d) async {
-    final v = d.primaryVelocity ?? 0;
-    const threshold = 600;
-    final bool atLastPage = _pageIndex >= (_pages.length - 1);
-    final bool atFirstPage = _pageIndex <= 0;
-    final bool hasPrev = _idx > 0;
-    final bool hasNext = _idx < widget.fullChapters.length - 1;
-    if (v > threshold) { if (atLastPage && hasNext) await _openChapter(_idx + 1); }
-    else if (v < -threshold) { if (atFirstPage && hasPrev) await _openChapter(_idx - 1); }
+    await _loadChapter(_idx);
   }
 
   // ===== UI =====
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('章節 ${_idx + 1}（${_pageIndex + 1}/${_pages.isEmpty ? 1 : _pages.length}）'),
-        actions: [
-          IconButton(
-            tooltip: '目錄',
-            icon: const Icon(Icons.menu_book_outlined),
-            onPressed: _showCatalog,
-          ),
-          IconButton(
-            tooltip: '閱讀統計',
-            icon: const Icon(Icons.timer_outlined),
-            onPressed: () async {
-              await _accumulateStats();
-              final sec = await _getTotalSeconds();
-              if (!mounted) return;
-              final h = sec ~/ 3600;
-              final m = (sec % 3600) ~/ 60;
-              final s = sec % 60;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('累計閱讀：${h}h ${m}m ${s}s')),
-              );
-            },
-          ),
-          IconButton(
-            tooltip: '外觀設定',
-            icon: const Icon(Icons.palette_outlined),
-            onPressed: _showSettingsSheet,
-          ),
-        ],
-      ),
-      body: Container(
-        color: _bgColor,
-        child: _pages.isEmpty
-            ? _buildEmpty()
-            : GestureDetector(
-                onHorizontalDragEnd: _onHorizontalSwipe,
-                child: PageView.builder(
-                  key: ValueKey<int>(_idx),
-                  controller: _pc,
-                  scrollDirection: Axis.vertical,
-                  onPageChanged: (i) => setState(() {
-                    _pageIndex = i;
-                    _saveLastPageFor(widget.fullChapters[_idx].chapId, _pageIndex);
-                    _accumulateStats();
-                  }),
-                  itemCount: _pages.length,
-                  itemBuilder: (c, i) {
-                    final r = _pages[i];
-                    final pageText = _text.substring(r.start, r.end);
-                    return _ReaderPage(text: pageText, fontSize: _fontSize, bgColor: _bgColor);
-                  },
-                ),
+    final theme = _resolveTheme(context);
+    return Theme(
+      data: theme,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text('章節 ${_idx + 1}（${_pageIndex + 1}/${_pageRanges.isEmpty ? 1 : _pageRanges.length}）'),
+          actions: [
+            IconButton(
+              tooltip: '目錄',
+              icon: const Icon(Icons.menu_book_outlined),
+              onPressed: _showCatalog,
+            ),
+            IconButton(
+              tooltip: '閱讀統計',
+              icon: const Icon(Icons.timer_outlined),
+              onPressed: () async {
+                await _accumulateStats();
+                final sec = await _getTotalSeconds();
+                if (!mounted) return;
+                final h = sec ~/ 3600;
+                final m = (sec % 3600) ~/ 60;
+                final s = sec % 60;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('累計閱讀：${h}h ${m}m ${s}s')),
+                );
+              },
+            ),
+            IconButton(
+              tooltip: '外觀設定',
+              icon: const Icon(Icons.palette_outlined),
+              onPressed: _showSettingsSheet,
+            ),
+          ],
+        ),
+        body: LayoutBuilder(
+          builder: (context, constraints) {
+            final w = constraints.maxWidth;
+            final h = constraints.maxHeight;
+            final size = Size(w, h);
+            if (size != _lastPageSize) {
+              _lastPageSize = size;
+              // on size change, redo pagination
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                _ensurePaginationAndJump(_pageIndex);
+              });
+            }
+
+            final bool noContent = _text.trim().isEmpty;
+            if (noContent) {
+              return _buildEmptyContent();
+            }
+
+            if (_pageRanges.isEmpty) {
+              // still computing; show placeholder
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            return GestureDetector(
+              onHorizontalDragEnd: _onHorizontalDragEnd,
+              child: PageView.builder(
+                key: ValueKey<int>(_idx),
+                controller: _pc,
+                scrollDirection: Axis.horizontal,
+                onPageChanged: (i) {
+                  setState(() => _pageIndex = i);
+                  final chapId = _chapIdOf(widget.fullChapters[_idx]);
+                  _saveLastPageFor(chapId, i);
+                  _accumulateStats();
+                },
+                itemCount: _pageRanges.length,
+                itemBuilder: (c, i) {
+                  final r = _pageRanges[i];
+                  final pageText = _text.substring(r.start, r.end);
+                  return CustomPaint(
+                    painter: hp.HorizontalPagePainter(
+                      text: pageText,
+                      style: TextStyle(
+                        fontSize: _fontSize,
+                        height: _lineHeight,
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? Colors.white70 : Colors.black87,
+                      ),
+                      padding: _pagePadding,
+                      bgColor: _bgColor,
+                    ),
+                    child: Container(color: _bgColor),
+                  );
+                },
               ),
+            );
+          },
+        ),
+        bottomNavigationBar: _buildBottomBar(),
       ),
-      bottomNavigationBar: _pages.isEmpty ? null : _buildBottomBar(),
     );
   }
 
-  Widget _buildEmpty() {
-    final chap = widget.fullChapters[_idx];
+  void _onHorizontalDragEnd(DragEndDetails d) async {
+    final v = d.primaryVelocity ?? 0;
+    const threshold = 600; // px/s
+    final bool atLastPage = _pageIndex >= _pageRanges.length - 1;
+    final bool atFirstPage = _pageIndex <= 0;
+    final bool hasPrev = _idx > 0;
+    final bool hasNext = _idx < widget.fullChapters.length - 1;
+
+    if (v < -threshold) {
+      // right-to-left (next page) -> at last page, go next chapter
+      if (atLastPage && hasNext) {
+        await _openChapter(_idx + 1);
+      }
+    } else if (v > threshold) {
+      // left-to-right (prev page) -> at first page, go prev chapter
+      if (atFirstPage && hasPrev) {
+        await _openChapter(_idx - 1);
+      }
+    }
+  }
+
+  Widget _buildEmptyContent() {
+    final t = _titleOf(widget.fullChapters[_idx], _idx);
+    final id = _chapIdOf(widget.fullChapters[_idx]);
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -241,21 +377,23 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
           mainAxisSize: MainAxisSize.min,
           children: [
             const Icon(Icons.menu_book_outlined, size: 48),
-            const SizedBox(height: 8),
-            Text('沒有內容（章: ${chap.title} / ${chap.chapId}）'),
             const SizedBox(height: 12),
+            Text('本章沒有可顯示的內容', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 6),
+            Text('章：$t（$id）', style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 16),
             Wrap(
               spacing: 8,
               children: [
                 ElevatedButton.icon(
-                  onPressed: () => _loadTextFor(_idx),
                   icon: const Icon(Icons.refresh),
-                  label: const Text('重新嘗試'),
+                  label: const Text('重新載入'),
+                  onPressed: () => _loadChapter(_idx, keepPage: true),
                 ),
                 OutlinedButton.icon(
-                  onPressed: _showCatalog,
-                  icon: const Icon(Icons.list),
+                  icon: const Icon(Icons.menu_open),
                   label: const Text('開啟目錄'),
+                  onPressed: _showCatalog,
                 ),
               ],
             ),
@@ -265,6 +403,15 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     );
   }
 
+  ThemeData _resolveTheme(BuildContext context) {
+    switch (_themeMode) {
+      case 1: return Theme.of(context).copyWith(brightness: Brightness.light);
+      case 2: return Theme.of(context).copyWith(brightness: Brightness.dark);
+      default: return Theme.of(context);
+    }
+  }
+
+  // ===== Catalog =====
   void _showCatalog() {
     showModalBottomSheet(
       context: context,
@@ -277,9 +424,10 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
             separatorBuilder: (_, __) => const Divider(height: 1),
             itemBuilder: (_, i) {
               final ch = widget.fullChapters[i];
+              final title = _titleOf(ch, i);
               return ListTile(
                 leading: Text('${i + 1}'),
-                title: Text(ch.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
                 trailing: i == _idx ? const Icon(Icons.check) : null,
                 onTap: () {
                   Navigator.of(ctx).pop();
@@ -293,6 +441,7 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     );
   }
 
+  // ===== Settings =====
   void _showSettingsSheet() {
     showModalBottomSheet(
       context: context,
@@ -301,6 +450,7 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
         double localFont = _fontSize;
         int localMode = _themeMode;
         Color localBg = _bgColor;
+        double localLine = _lineHeight;
         return StatefulBuilder(
           builder: (c, setSheet) {
             return Padding(
@@ -316,9 +466,27 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
                       const Text('字體大小'),
                       Expanded(
                         child: Slider(
-                          value: localFont, min: 12, max: 28, divisions: 16,
+                          value: localFont,
+                          min: 12,
+                          max: 28,
+                          divisions: 16,
                           label: '${localFont.toStringAsFixed(0)}',
                           onChanged: (v) => setSheet(() => localFont = v),
+                        ),
+                      ),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      const Text('行高'),
+                      Expanded(
+                        child: Slider(
+                          value: localLine,
+                          min: 1.2,
+                          max: 2.0,
+                          divisions: 8,
+                          label: localLine.toStringAsFixed(1),
+                          onChanged: (v) => setSheet(() => localLine = v),
                         ),
                       ),
                     ],
@@ -328,11 +496,23 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
                     children: [
                       const Text('主題'),
                       const SizedBox(width: 12),
-                      ChoiceChip(label: const Text('跟隨系統'), selected: localMode == 0, onSelected: (_)=>setSheet(()=>localMode=0)),
+                      ChoiceChip(
+                        label: const Text('跟隨系統'),
+                        selected: localMode == 0,
+                        onSelected: (_) => setSheet(() => localMode = 0),
+                      ),
                       const SizedBox(width: 8),
-                      ChoiceChip(label: const Text('日間'), selected: localMode == 1, onSelected: (_)=>setSheet(()=>localMode=1)),
+                      ChoiceChip(
+                        label: const Text('日間'),
+                        selected: localMode == 1,
+                        onSelected: (_) => setSheet(() => localMode = 1),
+                      ),
                       const SizedBox(width: 8),
-                      ChoiceChip(label: const Text('夜間'), selected: localMode == 2, onSelected: (_)=>setSheet(()=>localMode=2)),
+                      ChoiceChip(
+                        label: const Text('夜間'),
+                        selected: localMode == 2,
+                        onSelected: (_) => setSheet(() => localMode = 2),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -340,15 +520,26 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
                     children: [
                       const Text('背景色'),
                       const SizedBox(width: 12),
-                      for (final c0 in <Color>[const Color(0xFFFAF6EF), Colors.white, const Color(0xFF121212), const Color(0xFFFFF8E1)])
+                      for (final c0 in <Color>[
+                        const Color(0xFFFAF6EF),
+                        Colors.white,
+                        const Color(0xFF121212),
+                        const Color(0xFFFFF8E1),
+                      ])
                         Padding(
                           padding: const EdgeInsets.only(right: 8),
                           child: GestureDetector(
                             onTap: () => setSheet(() => localBg = c0),
                             child: Container(
                               width: 28, height: 28,
-                              decoration: BoxDecoration(color: c0, shape: BoxShape.circle, border: Border.all(color: Colors.black12)),
-                              child: localBg.value == c0.value ? const Icon(Icons.check, size: 18) : null,
+                              decoration: BoxDecoration(
+                                color: c0,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.black12),
+                              ),
+                              child: localBg.value == c0.value
+                                  ? const Icon(Icons.check, size: 18)
+                                  : null,
                             ),
                           ),
                         ),
@@ -358,20 +549,26 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      TextButton(onPressed: () => Navigator.of(c).pop(), child: const Text('取消')),
+                      TextButton(
+                        onPressed: () => Navigator.of(c).pop(),
+                        child: const Text('取消'),
+                      ),
                       const SizedBox(width: 8),
                       ElevatedButton(
                         onPressed: () {
                           Navigator.of(c).pop();
+                          final needRepaginate = localFont != _fontSize || localLine != _lineHeight;
                           setState(() {
                             _fontSize = localFont;
                             _themeMode = localMode;
                             _bgColor = localBg;
-                            _paginate();
-                            final cur = _pageIndex.clamp(0, _pages.isEmpty ? 0 : _pages.length - 1);
-                            _pc = PageController(initialPage: cur);
+                            _lineHeight = localLine;
                           });
                           _savePrefs();
+                          if (needRepaginate) {
+                            _paginationCache.clear();
+                            _ensurePaginationAndJump(_pageIndex);
+                          }
                         },
                         child: const Text('套用'),
                       ),
@@ -387,7 +584,7 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
   }
 
   Widget _buildBottomBar() {
-    final total = _pages.length;
+    final total = _pageRanges.isEmpty ? 1 : _pageRanges.length;
     return Material(
       color: Theme.of(context).colorScheme.surface,
       elevation: 2,
@@ -400,56 +597,42 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
               IconButton(
                 icon: const Icon(Icons.chevron_left),
                 onPressed: _pageIndex > 0
-                    ? () => _pc.previousPage(duration: const Duration(milliseconds: 180), curve: Curves.easeOut)
+                    ? () => _pc.previousPage(
+                          duration: const Duration(milliseconds: 180),
+                          curve: Curves.easeOut,
+                        )
                     : null,
               ),
               Expanded(
-                child: total <= 1 ? const SizedBox.shrink() : Slider(
-                  value: (_pageIndex + 1).toDouble(),
-                  min: 1, max: total.toDouble(),
-                  label: '${_pageIndex + 1}/$total',
-                  onChanged: (v) {
-                    final target = v.round() - 1;
-                    if (target != _pageIndex) {
-                      _pc.jumpToPage(target);
-                      setState(() => _pageIndex = target);
-                      _saveLastPageFor(widget.fullChapters[_idx].chapId, target);
-                    }
-                  },
-                ),
+                child: total <= 1
+                    ? const SizedBox.shrink()
+                    : Slider(
+                        value: (_pageIndex + 1).toDouble(),
+                        min: 1,
+                        max: total.toDouble(),
+                        label: '${_pageIndex + 1}/$total',
+                        onChanged: (v) {
+                          final target = v.round() - 1;
+                          if (target != _pageIndex) {
+                            _pc.jumpToPage(target);
+                            setState(() => _pageIndex = target);
+                            final chapId = _chapIdOf(widget.fullChapters[_idx]);
+                            _saveLastPageFor(chapId, target);
+                          }
+                        },
+                      ),
               ),
               IconButton(
                 icon: const Icon(Icons.chevron_right),
                 onPressed: _pageIndex < total - 1
-                    ? () => _pc.nextPage(duration: const Duration(milliseconds: 180), curve: Curves.easeOut)
+                    ? () => _pc.nextPage(
+                          duration: const Duration(milliseconds: 180),
+                          curve: Curves.easeOut,
+                        )
                     : null,
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ReaderPage extends StatelessWidget {
-  final String text;
-  final double fontSize;
-  final Color bgColor;
-  const _ReaderPage({required this.text, required this.fontSize, required this.bgColor});
-
-  @override
-  Widget build(BuildContext context) {
-    final textColor = Theme.of(context).brightness == Brightness.dark ? Colors.white70 : Colors.black87;
-    return SelectionArea(
-      child: Container(
-        color: bgColor,
-        padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
-        alignment: Alignment.topLeft,
-        child: Text(
-          text.isEmpty ? '（本章無內容）' : text,
-          textAlign: TextAlign.start,
-          style: Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.6, fontSize: fontSize, color: textColor),
         ),
       ),
     );
