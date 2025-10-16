@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:auto_size_text/auto_size_text.dart';
+import 'dart:convert';
 
 import '../services/dao.dart';
 import '../services/dao_extensions.dart';
 import '../services/prefs.dart';
+import '../services/cache_store.dart';
 import 'horizontal_typesetter.dart';
 import 'horizontal_page_painter.dart';
 
@@ -241,7 +243,23 @@ Future<void> _openAdjacentVolume({required bool next}) async {
   }));
 }
 
+
+String _layoutKey(Size size, EdgeInsets padding) {
+  final w = size.width.toStringAsFixed(1);
+  final h = size.height.toStringAsFixed(1);
+  final l = padding.left.toStringAsFixed(1);
+  final t = padding.top.toStringAsFixed(1);
+  final r = padding.right.toStringAsFixed(1);
+  final b = padding.bottom.toStringAsFixed(1);
+  return 'f=$_fontSize|${w}x${h}|p=$l,$t,$r,$b';
 }
+String _globalCacheKey(Size size, EdgeInsets padding) => 'global_pages_v1|' + _layoutKey(size, padding);
+Future<String> _volumeCacheKey(Size size, EdgeInsets padding) async {
+  final volId = await _currentVolumeId() ?? 'unknown';
+  return 'volume_pages_v1|vol=$volId|' + _layoutKey(size, padding);
+}
+}
+
 
 
   void _openChapter(int newIndex) {
