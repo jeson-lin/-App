@@ -397,7 +397,7 @@ appBar: AppBar(
               key: ValueKey<int>(_idx),
               controller: _pc,
               scrollDirection: Axis.vertical, // 章內上下翻頁
-              onPageChanged: (i) => setState(() { _pageIndex = i; _updateVolumeIndex?.call(); _updateGlobalIndex?.call(); }),
+              onPageChanged: (i) => setState(() { _pageIndex = i; _updateVolumeIndex(); _updateGlobalIndex(); }),
               itemCount: _pages.length,
               itemBuilder: (c, i) {
                 final pr = _pages[i] as dynamic;
