@@ -26,7 +26,14 @@ class SutraReaderPage extends StatefulWidget {
 }
 
 class _SutraReaderPageState extends State<SutraReaderPage> {
-  // 章索引
+  
+  // === Added by fix: paging counters ===
+  int _pageIndex = 0;              // 章內目前頁
+  int _volPageIndex = 0;           // 卷內目前第幾頁（若未計算則與章內相同）
+  int _volTotalPages = 0;          // 卷內總頁數（未知時為 0 顯示 …/…）
+  int _globalPageIndex = 0;        // 全書目前頁（未知時為 0）
+  int _globalTotalPages = 0;       // 全書總頁數（未知時為 0）
+// 章索引
   late int _idx;
 
   // 章文字 & 分頁
@@ -434,6 +441,20 @@ appBar: AppBar(
         },
       ),
     );
+  
+  // === Added by fix: counters update stubs ===
+  Future<void> _updateVolumeIndex() async {
+    // TODO: 若有卷級分頁快取，可在此讀取並計算。
+    // 先至少讓數值合理，不影響編譯與顯示。
+    _volPageIndex = _pageIndex;
+    // 保留 _volTotalPages 為 0 以顯示 …/…，避免誤導。
   }
 
+  Future<void> _updateGlobalIndex() async {
+    // TODO: 若有全域分頁快取，可在此讀取並計算。
+    _globalPageIndex = _volPageIndex; // 暫以卷頁位置代替
+    // 保留 _globalTotalPages 為 0 以顯示 …/…。
+  }
 }
+
+
