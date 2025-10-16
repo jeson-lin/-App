@@ -34,6 +34,8 @@ class CacheStore {
       final dir = await _dir();
       final file = File('${dir.path}/${_safe(key)}.json');
       await file.writeAsString(jsonEncode(data));
-    } catch (_) {}
+    } catch (_) {
+      // ignore
+    }
   }
 }
