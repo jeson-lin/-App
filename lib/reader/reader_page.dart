@@ -173,26 +173,21 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
         if (obj.containsKey(k)) return obj[k];
       }
     }
-    // direct getters
-    for (final k in candidates) {
-      try {
-        final v = (obj as dynamic).__getattr__;
-      } catch (_) {
-        try {
-          final v = (obj as dynamic).toJson();
-          if (v is Map && v.containsKey(k)) return v[k];
-        } catch (_) {
-          try { return (obj as dynamic).chapId; } catch (_) {}
+    // toJson
+    try {
+      final v = (obj as dynamic).toJson();
+      if (v is Map) {
+        for (final k in candidates) {
+          if (v.containsKey(k)) return v[k];
         }
       }
-    }
-    // last resort
+    } catch (_) {}
+    // direct common getter
     try { return (obj as dynamic).chapId; } catch (_) {}
     return null;
   }
 
   String _chapterTitle(dynamic chap, int idx) {
-    // Try common fields
     for (final name in const ['title', 'chapterTitle', 'name']) {
       try {
         if (chap is Map && chap[name] is String) return chap[name] as String;
@@ -363,7 +358,6 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
 
   // ===== Catalog (目錄) =====
   void _showCatalog() {
-    // Try grouping by volId if available
     final Map<String, List<int>> groups = <String, List<int>>{};
     for (int i = 0; i < widget.fullChapters.length; i++) {
       final chap = widget.fullChapters[i];
@@ -378,7 +372,6 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
       isScrollControlled: true,
       builder: (ctx) {
         if (!hasVolumes) {
-          // Flat chapter list
           return SizedBox(
             height: MediaQuery.of(ctx).size.height * 0.7,
             child: ListView.separated(
@@ -400,10 +393,8 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
             ),
           );
         } else {
-          // Volume + chapter two-pane
           final vols = groups.keys.toList();
           int volIndex = 0;
-          // try to locate current vol
           final curVol = _volumeId(widget.fullChapters[_idx]);
           if (curVol != null) {
             volIndex = vols.indexOf(curVol);
@@ -518,137 +509,7 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     );
   }
 
-  ThemeData _resolveTheme(BuildContext context) {
-    switch (_themeMode) {
-      case 1: return Theme.of(context).copyWith(brightness: Brightness.light);
-      case 2: return Theme.of(context).copyWith(brightness: Brightness.dark);
-      default: return Theme.of(context);
-    }
-  }
-
-  void _showSettingsSheet() {
-    showModalBottomSheet(
-      context: context,
-      showDragHandle: true,
-      builder: (c) {
-        double localFont = _fontSize;
-        int localMode = _themeMode;
-        Color localBg = _bgColor;
-        return StatefulBuilder(
-          builder: (c, setSheet) {
-            return Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('外觀設定', style: Theme.of(c).textTheme.titleMedium),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      const Text('字體大小'),
-                      Expanded(
-                        child: Slider(
-                          value: localFont,
-                          min: 12,
-                          max: 28,
-                          divisions: 16,
-                          label: '${localFont.toStringAsFixed(0)}',
-                          onChanged: (v) => setSheet(() => localFont = v),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      const Text('主題'),
-                      const SizedBox(width: 12),
-                      ChoiceChip(
-                        label: const Text('跟隨系統'),
-                        selected: localMode == 0,
-                        onSelected: (_) => setSheet(() => localMode = 0),
-                      ),
-                      const SizedBox(width: 8),
-                      ChoiceChip(
-                        label: const Text('日間'),
-                        selected: localMode == 1,
-                        onSelected: (_) => setSheet(() => localMode = 1),
-                      ),
-                      const SizedBox(width: 8),
-                      ChoiceChip(
-                        label: const Text('夜間'),
-                        selected: localMode == 2,
-                        onSelected: (_) => setSheet(() => localMode = 2),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      const Text('背景色'),
-                      const SizedBox(width: 12),
-                      for (final c0 in <Color>[
-                        const Color(0xFFFAF6EF),
-                        Colors.white,
-                        const Color(0xFF121212),
-                        const Color(0xFFFFF8E1),
-                      ])
-                        Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: GestureDetector(
-                            onTap: () => setSheet(() => localBg = c0),
-                            child: Container(
-                              width: 28, height: 28,
-                              decoration: BoxDecoration(
-                                color: c0,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: Colors.black12),
-                              ),
-                              child: localBg.value == c0.value
-                                  ? const Icon(Icons.check, size: 18)
-                                  : null,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      TextButton(
-                        onPressed: () => Navigator.of(c).pop(),
-                        child: const Text('取消'),
-                      ),
-                      const SizedBox(width: 8),
-                      ElevatedButton(
-                        onPressed: () {
-                          Navigator.of(c).pop();
-                          setState(() {
-                            _fontSize = localFont;
-                            _themeMode = localMode;
-                            _bgColor = localBg;
-                            _paginate();
-                            final cur = _pageIndex.clamp(0, _pages.length - 1);
-                            _pc = PageController(initialPage: cur);
-                          });
-                          _savePrefs();
-                        },
-                        child: const Text('套用'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
 }
-
 class _ReaderPage extends StatelessWidget {
   final String text;
   final double fontSize;
