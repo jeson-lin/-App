@@ -1,89 +1,86 @@
+
 // lib/reader/horizontal_page_painter.dart
 import 'package:flutter/material.dart';
-import 'layout/grid_layout.dart';
 
+/// 單欄橫排頁面繪製器
+/// - 僅負責把「該頁的文字內容」畫到畫布上
+/// - 分頁已由 HorizontalTypesetter 完成，這裡依據 [range] 決定要畫的區段
 class HorizontalPagePainter extends CustomPainter {
+  final String text;
+  final TextRange range;
+  final TextStyle style;
+  final EdgeInsets padding;
+  final double columnGap; // 單欄模式不使用，但保留參數相容
+  final Color textColor;
+  final ValueChanged<int>? onLastPaintedIndex;
+
   HorizontalPagePainter({
     required this.text,
     required this.range,
     required this.style,
     required this.padding,
     this.columnGap = 0,
-    this.textColor,
+    this.textColor = const Color(0xFF222222),
     this.onLastPaintedIndex,
   });
 
-  final String text;
-  final TextRange range;
-  final TextStyle style;
-  final EdgeInsets padding;
-  final double columnGap;
-  final Color? textColor;
-  final ValueChanged<int>? onLastPaintedIndex;
-
   @override
   void paint(Canvas canvas, Size size) {
-    final grid = computeGrid(
-      style: style,
-      padding: padding,
-      columnGap: columnGap,
-      pageSize: size,
-    );
-    final cw = grid.charSize.width;
-    final ch = grid.charSize.height;
-    final cols = grid.cols;
-    final rows = grid.rows;
-    final paintStyle = style.copyWith(color: textColor ?? style.color);
+    // 內容區域（排除 padding）
+    final double contentWidth = (size.width - padding.horizontal).clamp(0.0, size.width);
+    final double contentHeight = (size.height - padding.vertical).clamp(0.0, size.height);
 
-    double originX = padding.left;
-    double originY = padding.top;
-
-    int col = 0;
-    int row = 0;
-    int i = range.start;
-    int last = range.start - 1;
-
-    final tp = TextPainter(
-      textDirection: TextDirection.ltr,
-      maxLines: 1,
-    );
-
-    while (i < range.end && i < text.length) {
-      final chStr = text[i];
-      if (chStr == '\n') {
-        row += 1;
-        col = 0;
-        i += 1;
-        if (row >= rows) break;
-        originX = padding.left;
-        originY += ch;
-        continue;
-      }
-      if (col >= cols) {
-        row += 1;
-        col = 0;
-        if (row >= rows) break;
-        originX = padding.left;
-        originY += ch;
-      }
-      tp.text = TextSpan(text: chStr, style: paintStyle);
-      tp.layout();
-      tp.paint(canvas, Offset(originX, originY));
-      last = i;
-      col += 1;
-      originX += cw + columnGap;
-      i += 1;
+    // 防禦：沒有可畫的空間或 range 無效
+    if (contentWidth <= 0 || contentHeight <= 0 || range.start >= range.end) {
+      return;
     }
-    onLastPaintedIndex?.call(last);
+    final int start = range.start.clamp(0, text.length);
+    final int end = range.end.clamp(0, text.length);
+    if (start >= end) return;
+
+    final String pageText = text.substring(start, end);
+
+    // 使用 TextPainter 以確保可靠渲染（避免 Paragraph/clip 參數錯誤導致整頁不顯示）
+    final TextPainter tp = TextPainter(
+      text: TextSpan(text: pageText, style: style.copyWith(color: textColor)),
+      textAlign: TextAlign.left,
+      textDirection: TextDirection.ltr,
+      ellipsis: null,
+      maxLines: null,
+    );
+
+    tp.layout(maxWidth: contentWidth);
+
+    // 以 padding 為原點繪製
+    canvas.save();
+    // clip 成內容區，避免超出
+    final Rect contentRect = Rect.fromLTWH(
+      padding.left,
+      padding.top,
+      contentWidth,
+      contentHeight,
+    );
+    canvas.clipRect(contentRect);
+    canvas.translate(padding.left, padding.top);
+
+    tp.paint(canvas, Offset.zero);
+    canvas.restore();
+
+    // 回報最後繪製到的索引（此頁的最後字元索引）
+    if (onLastPaintedIndex != null) {
+      onLastPaintedIndex!(end - 1);
+    }
   }
 
   @override
   bool shouldRepaint(covariant HorizontalPagePainter oldDelegate) {
-    return text != oldDelegate.text ||
-        range != oldDelegate.range ||
-        style != oldDelegate.style ||
-        padding != oldDelegate.padding ||
-        columnGap != oldDelegate.columnGap ||
-        textColor != oldDelegate.textColor;
+    return identical(this, oldDelegate) == false &&
+        (text != oldDelegate.text ||
+            range.start != oldDelegate.range.start ||
+            range.end != oldDelegate.range.end ||
+            padding != oldDelegate.padding ||
+            columnGap != oldDelegate.columnGap ||
+            textColor != oldDelegate.textColor ||
+            style != oldDelegate.style);
   }
 }
