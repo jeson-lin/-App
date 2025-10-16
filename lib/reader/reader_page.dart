@@ -1,15 +1,13 @@
 
 import 'package:flutter/material.dart';
 import '../services/cache_store.dart';
-import 'horizontal_typesetter.dart' as ht;
-import 'horizontal_page_painter.dart' as hp;
+import 'horizontal_typesetter.dart';
+import 'horizontal_page_painter.dart';
 
-/// Reader page (horizontal typeset integration)
-/// - Real pagination using HorizontalTypesetter + HorizontalPagePainter
-/// - Horizontal page turning (left/right)
-/// - Edge swipe at first/last page switches chapters
-/// - Catalog to jump chapters
-/// - Last-read per chapter; reading stats; appearance settings
+/// Reader page integrated with HorizontalTypesetter + HorizontalPagePainter
+/// - True pagination using grid_layout (cols x rows) based on page size & text style
+/// - Horizontal page turning; edge-swipe switches chapter
+/// - Catalog, last-read per chapter, reading stats, appearance settings
 class SutraReaderPage extends StatefulWidget {
   final dynamic dao;
   /// Chapters are records like: ({String chapId, String title})
@@ -51,7 +49,7 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
   int? _lastOpenTs;
 
   // caches
-  final Map<String, List<TextRange>> _paginationCache = {}; // key: chapId|font|size
+  final Map<String, List<TextRange>> _paginationCache = {}; // key: chapId|font|size|padding
 
   @override
   void initState() {
@@ -61,6 +59,10 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     _pc = PageController();
     _loadPrefs();
     _startSession();
+    // Load current chapter immediately
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadChapter(_idx);
+    });
   }
 
   @override
@@ -171,12 +173,12 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     if (!mounted) return;
     setState(() {
       _text = t;
-      _pageRanges = <TextRange>[]; // will be populated after layout pass
-      _pageIndex = 0; // temp
+      _pageRanges = <TextRange>[];
+      _pageIndex = 0;
       _pc = PageController(initialPage: 0);
     });
 
-    // wait for layout then paginate
+    // After first layout we can paginate with concrete page size
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _ensurePaginationAndJump(initial);
     });
@@ -185,39 +187,42 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
   Future<void> _ensurePaginationAndJump(int initialPage) async {
     if (!mounted) return;
     final size = _lastPageSize;
-    if (size == Size.zero) return; // will be called again after first layout
+    if (size == Size.zero) return; // Will try again on next build/layout
+
     final chap = widget.fullChapters[_idx];
     final chapId = _chapIdOf(chap);
+    final cacheKey = '$chapId|${_fontSize.toStringAsFixed(1)}|${_lineHeight.toStringAsFixed(2)}|${size.width.toStringAsFixed(0)}x${size.height.toStringAsFixed(0)}|${_pagePadding.toString()}';
 
-    final cacheKey = '$chapId|${_fontSize.toStringAsFixed(1)}|${size.width.toStringAsFixed(0)}x${size.height.toStringAsFixed(0)}|${_pagePadding.toString()}';
     if (_paginationCache.containsKey(cacheKey)) {
       setState(() {
         _pageRanges = _paginationCache[cacheKey]!;
-        _pageIndex = initialPage.clamp(0, (_pageRanges.length - 1).clamp(0, 1 << 30));
+        _pageIndex = initialPage.clamp(0, _pageRanges.isEmpty ? 0 : _pageRanges.length - 1);
         _pc = PageController(initialPage: _pageIndex);
       });
       return;
     }
 
-    final style = TextStyle(fontSize: _fontSize, height: _lineHeight);
     List<TextRange> ranges = <TextRange>[];
-    try {
-      final typesetter = ht.HorizontalTypesetter(
-        text: _text,
-        style: style,
-        padding: _pagePadding,
-      );
-      ranges = typesetter.paginate(size);
-    } catch (e) {
-      // graceful fallback: naive word-chunk pagination, so UI still works
-      ranges = _fallbackPaginate(_text, _fontSize);
+    if (_text.trim().isNotEmpty) {
+      try {
+        final ts = HorizontalTypesetter(
+          text: _text,
+          style: TextStyle(fontSize: _fontSize, height: _lineHeight),
+          padding: _pagePadding,
+        );
+        final pages = ts.paginate(size); // List<HPageRange>
+        ranges = pages.map((e) => TextRange(start: e.start, end: e.end)).toList();
+      } catch (_) {
+        // fallback: chunk by count so user still can read
+        ranges = _fallbackPaginate(_text, _fontSize);
+      }
     }
 
     if (!mounted) return;
     setState(() {
       _pageRanges = ranges;
       _paginationCache[cacheKey] = ranges;
-      _pageIndex = initialPage.clamp(0, (_pageRanges.length - 1).clamp(0, 1 << 30));
+      _pageIndex = initialPage.clamp(0, _pageRanges.isEmpty ? 0 : _pageRanges.length - 1);
       _pc = PageController(initialPage: _pageIndex);
     });
   }
@@ -285,12 +290,9 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
         ),
         body: LayoutBuilder(
           builder: (context, constraints) {
-            final w = constraints.maxWidth;
-            final h = constraints.maxHeight;
-            final size = Size(w, h);
+            final size = Size(constraints.maxWidth, constraints.maxHeight);
             if (size != _lastPageSize) {
               _lastPageSize = size;
-              // on size change, redo pagination
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 _ensurePaginationAndJump(_pageIndex);
               });
@@ -302,7 +304,6 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
             }
 
             if (_pageRanges.isEmpty) {
-              // still computing; show placeholder
               return const Center(child: CircularProgressIndicator());
             }
 
@@ -321,18 +322,19 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
                 itemCount: _pageRanges.length,
                 itemBuilder: (c, i) {
                   final r = _pageRanges[i];
-                  final pageText = _text.substring(r.start, r.end);
                   return CustomPaint(
-                    painter: hp.HorizontalPagePainter(
-                      text: pageText,
+                    painter: HorizontalPagePainter(
+                      text: _text,
+                      range: r,
                       style: TextStyle(
                         fontSize: _fontSize,
                         height: _lineHeight,
-                        color: Theme.of(context).brightness == Brightness.dark
-                            ? Colors.white70 : Colors.black87,
                       ),
                       padding: _pagePadding,
-                      bgColor: _bgColor,
+                      columnGap: 0,
+                      textColor: Theme.of(context).brightness == Brightness.dark
+                          ? Colors.white70
+                          : Colors.black87,
                     ),
                     child: Container(color: _bgColor),
                   );
