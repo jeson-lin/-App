@@ -1,3 +1,5 @@
+
+
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:auto_size_text/auto_size_text.dart';
@@ -9,23 +11,24 @@ import '../services/cache_store.dart';
 import 'horizontal_typesetter.dart';
 import 'horizontal_page_painter.dart';
 
-/// 頁碼顯示模式
+/// 頁碼顯示模式（預留相容）
 enum PageCounterMode { chapter, volume, global }
 
-/// 舊版相容：維持同樣的 Widget 名稱與必要參數
+/// 與既有專案相容：
+/// required this.dao,
+/// required this.fullChapters, // List<({String chapId, String title})>
+/// required this.chapterIndex,
 class SutraReaderPage extends StatefulWidget {
   const SutraReaderPage({
     super.key,
     required this.dao,
-    required this.chap,
-    this.title,
-    this.counterMode = PageCounterMode.chapter,
+    required this.fullChapters, // List<({String chapId, String title})>
+    required this.chapterIndex,
   });
 
   final SutraDao dao;
-  final ChapterRow chap;
-  final String? title;
-  final PageCounterMode counterMode;
+  final List<({String chapId, String title})> fullChapters;
+  final int chapterIndex;
 
   @override
   State<SutraReaderPage> createState() => _SutraReaderPageState();
@@ -38,34 +41,33 @@ class _SutraReaderPageState extends State<SutraReaderPage> {
   int _pageIndex = 0;
   late final String _cacheKey;
 
+  ({String chapId, String title}) get _current =>
+      widget.fullChapters[widget.chapterIndex];
+
   @override
   void initState() {
     super.initState();
-    _cacheKey = 'reader:last@chap:${widget.chap.chapId}';
+    _cacheKey = 'reader:last@chap:${_current.chapId}';
     _bootstrap();
   }
 
   Future<void> _bootstrap() async {
-    // 先讀快取的頁碼
+    // 先讀快取頁碼
     final cached = await CacheStore.getInt(_cacheKey);
     if (cached != null) _pageIndex = cached;
-    // 載入章節文字
-    await _loadTextFor(widget.chap);
+    await _loadTextFor(_current.chapId);
   }
 
-  Future<void> _loadTextFor(ChapterRow chap) async {
+  Future<void> _loadTextFor(String chapId) async {
     try {
-      final text = await widget.dao.loadChapterText(chap.chapId);
+      final text = await widget.dao.loadChapterText(chapId);
       if (!mounted) return;
-      // 將章節文字切成「段落頁」：這邊以換行兩次為一段，
-      // 若你的 DB 已經提供段落分行，可直接使用。
       final raw = (text ?? '').trim();
       final pages = _splitToParagraphPages(raw);
       setState(() {
         _pages = pages;
         _loading = false;
       });
-      // 回到快取頁
       if (_pageIndex > 0 && _pageIndex < _pages.length) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (_pageController.hasClients) {
@@ -73,7 +75,7 @@ class _SutraReaderPageState extends State<SutraReaderPage> {
           }
         });
       }
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       setState(() {
         _pages = const [];
@@ -84,10 +86,17 @@ class _SutraReaderPageState extends State<SutraReaderPage> {
 
   List<String> _splitToParagraphPages(String raw) {
     if (raw.isEmpty) return const [];
-    // 優先用空行分段；若沒有空行，依句號/頓號等標點做粗略切分
-    final List<String> parts = raw.split(RegExp(r'\n{2,}')).map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    final parts = raw
+        .split(RegExp(r'\\n{2,}'))
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
     if (parts.length > 1) return parts;
-    final fallback = raw.split(RegExp(r'(?<=[。！？；\n])')).map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    final fallback = raw
+        .split(RegExp(r'(?<=[。！？；\\n])'))
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
     return fallback.isEmpty ? <String>[raw] : fallback;
   }
 
@@ -99,7 +108,7 @@ class _SutraReaderPageState extends State<SutraReaderPage> {
 
   @override
   Widget build(BuildContext context) {
-    final title = widget.title ?? '章節閱讀';
+    final title = _current.title.isNotEmpty ? _current.title : '章節閱讀';
     return Scaffold(
       appBar: AppBar(
         title: Text(title, overflow: TextOverflow.ellipsis),
@@ -114,7 +123,7 @@ class _SutraReaderPageState extends State<SutraReaderPage> {
       body: _loading
           ? const Center(child: _DotSpinner())
           : _pages.isEmpty
-              ? _EmptyState(onRetry: () => _loadTextFor(widget.chap))
+              ? _EmptyState(onRetry: () => _loadTextFor(_current.chapId))
               : PageView.builder(
                   controller: _pageController,
                   onPageChanged: (i) {
@@ -148,7 +157,7 @@ class _SutraReaderPageState extends State<SutraReaderPage> {
               children: [
                 Text('章節資訊', style: Theme.of(ctx).textTheme.titleMedium),
                 const SizedBox(height: 8),
-                Text('卷：${widget.chap.volId} 章：${widget.chap.chapId}'),
+                Text('章 ID：${_current.chapId}'),
                 const SizedBox(height: 8),
                 Text('頁數：${_pages.length}'),
                 const SizedBox(height: 8),
