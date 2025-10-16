@@ -265,6 +265,17 @@ Future<String> _volumeCacheKey(Size size, EdgeInsets padding) async {
   final volId = await _currentVolumeId() ?? 'unknown';
   return 'volume_pages_v1|vol=$volId|' + _layoutKey(size, padding);
 }
+
+  // === Counters update (inside class) ===
+  Future<void> _updateVolumeIndex() async {
+    _volPageIndex = _pageIndex;
+    // TODO: compute _volTotalPages if you have volume-level pagination cached.
+  }
+
+  Future<void> _updateGlobalIndex() async {
+    _globalPageIndex = _volPageIndex; // Fallback to volume index for now
+    // TODO: compute _globalTotalPages if you have global pagination cached.
+  }
 }
 
 
@@ -441,14 +452,6 @@ appBar: AppBar(
         },
       ),
     );
-  
-  // === Added by fix: counters update stubs ===
-  Future<void> _updateVolumeIndex() async {
-    // TODO: 若有卷級分頁快取，可在此讀取並計算。
-    // 先至少讓數值合理，不影響編譯與顯示。
-    _volPageIndex = _pageIndex;
-    // 保留 _volTotalPages 為 0 以顯示 …/…，避免誤導。
-  }
 
   Future<void> _updateGlobalIndex() async {
     // TODO: 若有全域分頁快取，可在此讀取並計算。
