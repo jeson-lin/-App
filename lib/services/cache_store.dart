@@ -1,41 +1,31 @@
-// lib/services/cache_store.dart
-import 'dart:convert';
-import 'dart:io';
-import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+/// 共用快取：閱讀位置、偏好等
 class CacheStore {
-  static Future<Directory> _dir() async {
-    final dir = await getApplicationDocumentsDirectory();
-    final cache = Directory('${dir.path}/cache');
-    if (!await cache.exists()) {
-      await cache.create(recursive: true);
-    }
-    return cache;
+  static Future<SharedPreferences> _prefs() => SharedPreferences.getInstance();
+
+  static Future<void> setInt(String key, int value) async {
+    final p = await _prefs();
+    await p.setInt(key, value);
   }
 
-  static String _safe(String key) {
-    return key.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+  static Future<int?> getInt(String key) async {
+    final p = await _prefs();
+    return p.getInt(key);
   }
 
-  static Future<Map<String, dynamic>?> readJson(String key) async {
-    try {
-      final dir = await _dir();
-      final file = File('${dir.path}/${_safe(key)}.json');
-      if (!await file.exists()) return null;
-      final s = await file.readAsString();
-      return jsonDecode(s) as Map<String, dynamic>;
-    } catch (_) {
-      return null;
-    }
+  static Future<void> setString(String key, String value) async {
+    final p = await _prefs();
+    await p.setString(key, value);
   }
 
-  static Future<void> writeJson(String key, Map<String, dynamic> data) async {
-    try {
-      final dir = await _dir();
-      final file = File('${dir.path}/${_safe(key)}.json');
-      await file.writeAsString(jsonEncode(data));
-    } catch (_) {
-      // ignore
-    }
+  static Future<String?> getString(String key) async {
+    final p = await _prefs();
+    return p.getString(key);
+  }
+
+  static Future<void> remove(String key) async {
+    final p = await _prefs();
+    await p.remove(key);
   }
 }
