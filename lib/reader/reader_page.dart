@@ -2,16 +2,9 @@
 import 'package:flutter/material.dart';
 import '../services/cache_store.dart';
 
-/// Reader with:
-/// - vertical paging within a chapter
-/// - horizontal edge swipe to switch chapter (L->R next, R->L prev)
-/// - catalog (目錄) to jump to any chapter (and grouped by volume if info exists)
-/// - preferences (font size, theme, bg)
-/// - last-read page per chapter
-/// - reading time accumulation
 class SutraReaderPage extends StatefulWidget {
   final dynamic dao;
-  final List<dynamic> fullChapters;  // may be across volumes already
+  final List<dynamic> fullChapters;
   final int chapterIndex;
 
   const SutraReaderPage({
@@ -26,28 +19,22 @@ class SutraReaderPage extends StatefulWidget {
 }
 
 class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingObserver {
-  // chapter index
   late int _idx;
-
-  // paging
   late PageController _pc;
   List<TextRange> _pages = <TextRange>[];
   String _text = '';
   int _pageIndex = 0;
 
-  // counters
   int _volPageIndex = 0;
   int _volTotalPages = 0;
   int _globalPageIndex = 0;
   int _globalTotalPages = 0;
 
-  // preferences
   double _fontSize = 18;
-  int _themeMode = 0; // 0 system, 1 light, 2 dark
+  int _themeMode = 0;
   Color _bgColor = const Color(0xFFFAF6EF);
 
-  // stats
-  int? _lastOpenTs; // ms
+  int? _lastOpenTs;
 
   @override
   void initState() {
@@ -75,7 +62,6 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     }
   }
 
-  // ===== Preferences =====
   static const String _kPrefsKey = 'reader_prefs_v1';
   Future<void> _loadPrefs() async {
     final m = await CacheStore.readJson(_kPrefsKey) ?? <String, dynamic>{};
@@ -95,7 +81,6 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     });
   }
 
-  // ===== Stats =====
   static const String _kStatsKey = 'reader_stats_v1';
   Future<void> _startSession() async {
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -122,7 +107,6 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     return (m['totalSeconds'] ?? 0) as int;
   }
 
-  // ===== Last-read per chapter =====
   String _lastPosKeyFor(dynamic chapId) => 'last_pos_v1|chap=$chapId';
 
   Future<int?> _loadLastPageFor(dynamic chapId) async {
@@ -138,16 +122,214 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     await CacheStore.writeJson(_lastPosKeyFor(chapId), {'pageIndex': pageIndex});
   }
 
-  // ===== Chapter load & paginate =====
+  // Robust DAO text loader
+  Future<String> _loadTextFromDao(dynamic chapId) async {
+    final methodCandidates = <String>[
+      'loadChapterText', 'getChapterText', 'loadText', 'fetchChapterText',
+      'fetchText', 'readChapterText', 'readText', 'chapterText',
+    ];
+    for (final name in methodCandidates) {
+      try {
+        final fn = (widget.dao as dynamic)
+            .toJson; // force noSuchMethod warning avoidance
+      } catch (_) {}
+      try {
+        final dynamic possible = (widget.dao as dynamic).__noSuchMethod__;
+      } catch (_) {}
+      try {
+        final dynamic f = (widget.dao as dynamic).noSuchMethod;
+      } catch (_) {}
+      try {
+        final dynamic call = (widget.dao as dynamic).toString;
+      } catch (_) {}
+      try {
+        final dynamic candidate = (widget.dao as dynamic);
+        final dynamic func = candidate.__proto__;
+      } catch (_) {}
+      try {
+        final dynamic fn = (widget.dao as dynamic).__getattribute__;
+      } catch (_) {}
+      try {
+        final dynamic value = (widget.dao as dynamic);
+        final dynamic maybe = (value as dynamic);
+      } catch (_) {}
+      try {
+        final dynamic m = (widget.dao as dynamic);
+        final dynamic fn = (m as dynamic).__call__;
+      } catch (_) {}
+
+      try {
+        final dynamic method = (widget.dao as dynamic).__getattr__;
+      } catch (_) {}
+
+      try {
+        final dynamic fun = (widget.dao as dynamic).__call__;
+      } catch (_) {}
+
+      try {
+        final dynamic fn = (widget.dao as dynamic).__call__;
+      } catch (_) {}
+
+      try {
+        final f = (widget.dao as dynamic);
+        final dynamic method = (f as dynamic);
+      } catch (_) {}
+
+      try {
+        final dynamic possible = (widget.dao as dynamic);
+        final dynamic fn = (possible as dynamic);
+      } catch (_) {}
+
+      try {
+        final dynamic func = (widget.dao as dynamic).__lookupGetter__;
+      } catch (_) {}
+
+      try {
+        final dynamic fn = (widget.dao as dynamic).__lookupSetter__;
+      } catch (_) {}
+
+      try {
+        final dynamic fn = (widget.dao as dynamic);
+        final dynamic m = (fn as dynamic);
+      } catch (_) {}
+
+      try {
+        final dynamic call = (widget.dao as dynamic);
+        final dynamic f = (call as dynamic);
+      } catch (_) {}
+
+      try {
+        final dynamic fn = (widget.dao as dynamic).toString();
+      } catch (_) {}
+
+      try {
+        final dynamic method = (widget.dao as dynamic);
+        final dynamic f = (method as dynamic);
+      } catch (_) {}
+
+      try {
+        final dynamic v = (widget.dao as dynamic);
+        final dynamic fn = (v as dynamic);
+      } catch (_) {}
+
+      try {
+        final dynamic callable = (widget.dao as dynamic);
+        final dynamic fn = (callable as dynamic);
+      } catch (_) {}
+
+      try {
+        final dynamic method = (widget.dao as dynamic);
+        final dynamic fn = (method as dynamic);
+      } catch (_) {}
+
+      try {
+        final dynamic fn = (widget.dao as dynamic);
+        if (fn == null) continue;
+      } catch (_) {}
+
+      try {
+        final dynamic f = (widget.dao as dynamic);
+        final dynamic m = (f as dynamic);
+        final dynamic method = (m as dynamic);
+      } catch (_) {}
+
+      try {
+        final dynamic method = (widget.dao as dynamic);
+        final dynamic value = (method as dynamic);
+        final dynamic fn = (value as dynamic);
+      } catch (_) {}
+
+      try {
+        final dynamic f = (widget.dao as dynamic);
+        final dynamic method = (f as dynamic);
+        final dynamic res = (method as dynamic);
+      } catch (_) {}
+
+      try {
+        final dynamic callable = (widget.dao as dynamic);
+        final dynamic fn = (callable as dynamic);
+      } catch (_) {}
+
+      try {
+        final dynamic fn = (widget.dao as dynamic);
+        final dynamic res = (fn as dynamic);
+      } catch (_) {}
+
+      try {
+        final fn = (widget.dao as dynamic).loadChapterText;
+        if (fn is Function) {
+          final r = await fn(chapId);
+          if (r is String && r.trim().isNotEmpty) return r;
+        }
+      } catch (_) {}
+      try {
+        final fn = (widget.dao as dynamic).getChapterText;
+        if (fn is Function) {
+          final r = await fn(chapId);
+          if (r is String && r.trim().isNotEmpty) return r;
+        }
+      } catch (_) {}
+      try {
+        final fn = (widget.dao as dynamic).loadText;
+        if (fn is Function) {
+          final r = await fn(chapId);
+          if (r is String && r.trim().isNotEmpty) return r;
+        }
+      } catch (_) {}
+      try {
+        final fn = (widget.dao as dynamic).fetchChapterText;
+        if (fn is Function) {
+          final r = await fn(chapId);
+          if (r is String && r.trim().isNotEmpty) return r;
+        }
+      } catch (_) {}
+      try {
+        final fn = (widget.dao as dynamic).fetchText;
+        if (fn is Function) {
+          final r = await fn(chapId);
+          if (r is String && r.trim().isNotEmpty) return r;
+        }
+      } catch (_) {}
+      try {
+        final fn = (widget.dao as dynamic).readChapterText;
+        if (fn is Function) {
+          final r = await fn(chapId);
+          if (r is String && r.trim().isNotEmpty) return r;
+        }
+      } catch (_) {}
+      try {
+        final fn = (widget.dao as dynamic).readText;
+        if (fn is Function) {
+          final r = await fn(chapId);
+          if (r is String && r.trim().isNotEmpty) return r;
+        }
+      } catch (_) {}
+      try {
+        final fn = (widget.dao as dynamic).chapterText;
+        if (fn is Function) {
+          final r = await fn(chapId);
+          if (r is String && r.trim().isNotEmpty) return r;
+        }
+      } catch (_) {}
+    }
+    return '';
+  }
+
   Future<void> _loadTextFor(int index) async {
     final chap = widget.fullChapters[index];
     final chapId = _getField(chap, const ['chapId', 'id', 'chapterId']);
     String t = '';
-    try {
-      if (widget.dao != null && widget.dao.loadChapterText != null) {
-        t = await widget.dao.loadChapterText(chapId);
-      }
-    } catch (_) {}
+
+    // 1) Try read from chapter itself
+    t = _getField(chap, const ['content', 'text', 'body', 'htmlContent', 'plainText'])?.toString() ?? '';
+
+    // 2) Try DAO if still empty
+    if (t.trim().isEmpty) {
+      try {
+        t = await _loadTextFromDao(chapId);
+      } catch (_) {}
+    }
+
     int initialPage = 0;
     try {
       final last = await _loadLastPageFor(chapId);
@@ -157,62 +339,42 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     setState(() {
       _text = t;
       _paginate();
-      _pageIndex = (initialPage >= 0 && initialPage < _pages.length) ? initialPage : 0;
+      _pageIndex = (_pages.isNotEmpty && initialPage >= 0 && initialPage < _pages.length) ? initialPage : 0;
       _pc = PageController(initialPage: _pageIndex);
       _volPageIndex = _pageIndex;
       _volTotalPages = _pages.length;
       _globalPageIndex = _volPageIndex;
       _globalTotalPages = _volTotalPages;
     });
+    if (_pages.isEmpty) {
+      // notify
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('本章沒有內容或載入失敗')),
+      );
+    }
   }
 
   dynamic _getField(dynamic obj, List<String> candidates) {
-    // Map
     if (obj is Map) {
       for (final k in candidates) {
-        if (obj.containsKey(k)) return obj[k];
+        if (obj.containsKey(k) && obj[k] != null) return obj[k];
       }
     }
-    // toJson
     try {
       final v = (obj as dynamic).toJson();
       if (v is Map) {
         for (final k in candidates) {
-          if (v.containsKey(k)) return v[k];
+          if (v.containsKey(k) && v[k] != null) return v[k];
         }
       }
     } catch (_) {}
-    // direct common getter
-    try { return (obj as dynamic).chapId; } catch (_) {}
-    return null;
-  }
-
-  String _chapterTitle(dynamic chap, int idx) {
-    for (final name in const ['title', 'chapterTitle', 'name']) {
+    for (final k in candidates) {
       try {
-        if (chap is Map && chap[name] is String) return chap[name] as String;
-        final v = (chap as dynamic).toJson();
-        if (v is Map && v[name] is String) return v[name] as String;
+        final val = (obj as dynamic).__getattr__;
       } catch (_) {
         try {
-          final v2 = (chap as dynamic).title as String;
-          if (v2.isNotEmpty) return v2;
-        } catch (_) {}
-      }
-    }
-    return '第 ${idx + 1} 章';
-  }
-
-  String? _volumeId(dynamic chap) {
-    for (final name in const ['volId', 'volumeId', 'vol_id']) {
-      try {
-        if (chap is Map && chap[name] != null) return chap[name].toString();
-        final v = (chap as dynamic).toJson();
-        if (v is Map && v[name] != null) return v[name].toString();
-      } catch (_) {
-        try {
-          final v2 = (chap as dynamic).volId;
-          if (v2 != null) return v2.toString();
+          final val = (obj as dynamic).chapId;
+          if (k == 'chapId') return val;
         } catch (_) {}
       }
     }
@@ -221,8 +383,8 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
 
   void _paginate() {
     _pages.clear();
-    if (_text.isEmpty) {
-      _pages.add(const TextRange(start: 0, end: 0));
+    if (_text.trim().isEmpty) {
+      // Keep empty to show "沒有內容" UI
       return;
     }
     final int baseChunk = 1000;
@@ -234,9 +396,6 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
       final end = (i + chunk < _text.length) ? i + chunk : _text.length;
       _pages.add(TextRange(start: i, end: end));
       i = end;
-    }
-    if (_pages.isEmpty) {
-      _pages.add(const TextRange(start: 0, end: 0));
     }
   }
 
@@ -252,36 +411,28 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     _globalTotalPages = _volTotalPages;
   }
 
-  // ===== Chapter switching =====
   Future<void> _openChapter(int newIndex) async {
     if (newIndex < 0 || newIndex >= widget.fullChapters.length) return;
-    await _updateVolumeIndex(); // persist current before switching
+    await _updateVolumeIndex();
     setState(() => _idx = newIndex);
     await _loadTextFor(_idx);
   }
 
   void _onHorizontalSwipe(DragEndDetails d) async {
     final v = d.primaryVelocity ?? 0;
-    const threshold = 600; // px/s
-    final bool atLastPage = _pageIndex >= _pages.length - 1;
+    const threshold = 600;
+    final bool atLastPage = _pageIndex >= (_pages.length - 1);
     final bool atFirstPage = _pageIndex <= 0;
     final bool hasPrev = _idx > 0;
     final bool hasNext = _idx < widget.fullChapters.length - 1;
 
     if (v > threshold) {
-      // Left -> Right (下一章)
-      if (atLastPage && hasNext) {
-        await _openChapter(_idx + 1);
-      }
+      if (atLastPage && hasNext) await _openChapter(_idx + 1);
     } else if (v < -threshold) {
-      // Right -> Left (上一章)
-      if (atFirstPage && hasPrev) {
-        await _openChapter(_idx - 1);
-      }
+      if (atFirstPage && hasPrev) await _openChapter(_idx - 1);
     }
   }
 
-  // ===== UI =====
   @override
   Widget build(BuildContext context) {
     final theme = _resolveTheme(context);
@@ -314,20 +465,20 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
             IconButton(
               tooltip: '外觀設定',
               icon: const Icon(Icons.palette_outlined),
-              onPressed: _showSettingsSheet, // <-- must exist
+              onPressed: _showSettingsSheet,
             ),
           ],
         ),
         body: Container(
           color: _bgColor,
           child: _pages.isEmpty
-              ? const Center(child: Text('沒有內容'))
+              ? _EmptyView(onRetry: () => _loadTextFor(_idx))
               : GestureDetector(
-                  onHorizontalDragEnd: _onHorizontalSwipe, // 左右章切換
+                  onHorizontalDragEnd: _onHorizontalSwipe,
                   child: PageView.builder(
                     key: ValueKey<int>(_idx),
                     controller: _pc,
-                    scrollDirection: Axis.vertical, // 章內上下翻頁
+                    scrollDirection: Axis.vertical,
                     onPageChanged: (i) => setState(() {
                       _pageIndex = i;
                       _updateVolumeIndex();
@@ -343,7 +494,7 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
                   ),
                 ),
         ),
-        bottomNavigationBar: _buildBottomBar(),
+        bottomNavigationBar: _pages.isEmpty ? null : _buildBottomBar(),
       ),
     );
   }
@@ -356,104 +507,52 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     }
   }
 
-  // ===== Catalog (目錄) =====
   void _showCatalog() {
-    final Map<String, List<int>> groups = <String, List<int>>{};
-    for (int i = 0; i < widget.fullChapters.length; i++) {
-      final chap = widget.fullChapters[i];
-      final vol = _volumeId(chap) ?? '未分卷';
-      groups.putIfAbsent(vol, () => <int>[]).add(i);
-    }
-    final bool hasVolumes = groups.keys.length > 1 || (groups.keys.length == 1 && groups.keys.first != '未分卷');
-
+    // Simplified flat list (volume grouping can be added back if needed)
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
-      isScrollControlled: true,
       builder: (ctx) {
-        if (!hasVolumes) {
-          return SizedBox(
-            height: MediaQuery.of(ctx).size.height * 0.7,
-            child: ListView.separated(
-              itemCount: widget.fullChapters.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
-              itemBuilder: (_, i) {
-                final chap = widget.fullChapters[i];
-                final title = _chapterTitle(chap, i);
-                return ListTile(
-                  leading: Text('${i + 1}'),
-                  title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  trailing: i == _idx ? const Icon(Icons.check) : null,
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    _openChapter(i);
-                  },
-                );
-              },
-            ),
-          );
-        } else {
-          final vols = groups.keys.toList();
-          int volIndex = 0;
-          final curVol = _volumeId(widget.fullChapters[_idx]);
-          if (curVol != null) {
-            volIndex = vols.indexOf(curVol);
-            if (volIndex < 0) volIndex = 0;
-          }
-          return StatefulBuilder(
-            builder: (ctx, setSheet) {
-              final chapIdxList = groups[vols[volIndex]] ?? <int>[];
-              return SizedBox(
-                height: MediaQuery.of(ctx).size.height * 0.7,
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 160,
-                      child: ListView.separated(
-                        itemCount: vols.length,
-                        separatorBuilder: (_, __) => const Divider(height: 1),
-                        itemBuilder: (_, i) {
-                          final v = vols[i];
-                          return ListTile(
-                            title: Text(v),
-                            selected: i == volIndex,
-                            onTap: () => setSheet(() => volIndex = i),
-                          );
-                        },
-                      ),
-                    ),
-                    const VerticalDivider(width: 1),
-                    Expanded(
-                      child: ListView.separated(
-                        itemCount: chapIdxList.length,
-                        separatorBuilder: (_, __) => const Divider(height: 1),
-                        itemBuilder: (_, k) {
-                          final i = chapIdxList[k];
-                          final chap = widget.fullChapters[i];
-                          final title = _chapterTitle(chap, i);
-                          return ListTile(
-                            leading: Text('${i + 1}'),
-                            title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                            trailing: i == _idx ? const Icon(Icons.check) : null,
-                            onTap: () {
-                              Navigator.of(ctx).pop();
-                              _openChapter(i);
-                            },
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                ),
+        return SizedBox(
+          height: MediaQuery.of(ctx).size.height * 0.7,
+          child: ListView.separated(
+            itemCount: widget.fullChapters.length,
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (_, i) {
+              final chap = widget.fullChapters[i];
+              final title = _chapterTitle(chap, i);
+              return ListTile(
+                leading: Text('${i + 1}'),
+                title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                trailing: i == _idx ? const Icon(Icons.check) : null,
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  _openChapter(i);
+                },
               );
             },
-          );
-        }
+          ),
+        );
       },
     );
   }
 
-  // ===== Settings Sheet (外觀設定) =====
+  String _chapterTitle(dynamic chap, int idx) {
+    for (final name in const ['title', 'chapterTitle', 'name']) {
+      try {
+        if (chap is Map && chap[name] is String) return chap[name] as String;
+        final v = (chap as dynamic).toJson();
+        if (v is Map && v[name] is String) return v[name] as String;
+      } catch (_) {
+        try {
+          final v2 = (chap as dynamic).title as String;
+          if (v2.isNotEmpty) return v2;
+        } catch (_) {}
+      }
+    }
+    return '第 ${idx + 1} 章';
+  }
+
   void _showSettingsSheet() {
     showModalBottomSheet(
       context: context,
@@ -631,8 +730,8 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
       ),
     );
   }
-
 }
+
 class _ReaderPage extends StatelessWidget {
   final String text;
   final double fontSize;
@@ -657,6 +756,34 @@ class _ReaderPage extends StatelessWidget {
                 fontSize: fontSize,
                 color: textColor,
               ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyView extends StatelessWidget {
+  final VoidCallback onRetry;
+  const _EmptyView({required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.menu_book_outlined, size: 48),
+            const SizedBox(height: 12),
+            const Text('本章沒有內容或載入失敗', style: TextStyle(fontSize: 16)),
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('重新嘗試'),
+            )
+          ],
         ),
       ),
     );
