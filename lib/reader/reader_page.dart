@@ -58,7 +58,7 @@ class _SutraReaderPageState extends State<SutraReaderPage>
   Database? _db;
 
   // === 診斷工具 ===
-  bool _debugPlainText = false; // 直接用 Text 呈現當頁內容（繞過 painter）
+  bool _debugPlainText = true; // 直接用 Text 呈現當頁內容（繞過 painter）
   String _debugPeek = '';       // SnackBar 顯示的檢查訊息
 
   @override
