@@ -4,13 +4,11 @@ import '../services/cache_store.dart';
 import 'horizontal_typesetter.dart';
 import 'horizontal_page_painter.dart';
 
-/// Reader page integrated with HorizontalTypesetter + HorizontalPagePainter
-/// - True pagination using grid_layout (cols x rows) based on page size & text style
-/// - Horizontal page turning; edge-swipe switches chapter
-/// - Catalog, last-read per chapter, reading stats, appearance settings
+/// 橫版閱讀頁（整合：HorizontalTypesetter + HorizontalPagePainter）
+/// 文字來源：SQLite `paragraphs`（chap_id, ord, text）→ 依 ord 串接成章文
 class SutraReaderPage extends StatefulWidget {
-  final dynamic dao;
-  /// Chapters are records like: ({String chapId, String title})
+  final dynamic dao; // 需提供 .db（sqflite Database）以及可選的 loadChapterText 等
+  /// 章清單：record 或 map，至少要有 chapId, title
   final List<dynamic> fullChapters;
   final int chapterIndex;
 
@@ -25,31 +23,30 @@ class SutraReaderPage extends StatefulWidget {
   State<SutraReaderPage> createState() => _SutraReaderPageState();
 }
 
-class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingObserver {
-  // chapter index
+class _SutraReaderPageState extends State<SutraReaderPage>
+    with WidgetsBindingObserver {
+  // 章索引
   late int _idx;
 
-  // paging
+  // 分頁
   late PageController _pc;
   int _pageIndex = 0;
-  List<TextRange> _pageRanges = <TextRange>[]; // computed by typesetter
+  List<TextRange> _pageRanges = <TextRange>[];
   String _text = '';
 
-  // layout
+  // 版面 & 外觀
   Size _lastPageSize = Size.zero;
   EdgeInsets _pagePadding = const EdgeInsets.fromLTRB(20, 28, 20, 32);
-
-  // preferences
   double _fontSize = 18;
   double _lineHeight = 1.6;
-  int _themeMode = 0; // 0 system, 1 light, 2 dark
+  int _themeMode = 0; // 0 系統, 1 亮, 2 暗
   Color _bgColor = const Color(0xFFFAF6EF);
 
-  // stats
+  // 統計
   int? _lastOpenTs;
 
-  // caches
-  final Map<String, List<TextRange>> _paginationCache = {}; // key: chapId|font|size|padding
+  // 分頁快取：chapId|font|line|size|padding -> ranges
+  final Map<String, List<TextRange>> _paginationCache = {};
 
   @override
   void initState() {
@@ -59,7 +56,8 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     _pc = PageController();
     _loadPrefs();
     _startSession();
-    // Load current chapter immediately
+
+    // 第一個 frame 後載入目前章
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadChapter(_idx);
     });
@@ -75,19 +73,23 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
       _accumulateStats();
     }
   }
 
-  // ===== Preferences =====
+  // ========= 偏好 =========
   static const String _kPrefsKey = 'reader_prefs_v1';
+
   Future<void> _loadPrefs() async {
     final m = await CacheStore.readJson(_kPrefsKey) ?? <String, dynamic>{};
     if (!mounted) return;
     setState(() {
-      _fontSize = (m['fontSize'] is num) ? (m['fontSize'] as num).toDouble() : _fontSize;
-      _themeMode = (m['themeMode'] is num) ? (m['themeMode'] as num).toInt() : _themeMode;
+      _fontSize =
+          (m['fontSize'] is num) ? (m['fontSize'] as num).toDouble() : _fontSize;
+      _themeMode =
+          (m['themeMode'] is num) ? (m['themeMode'] as num).toInt() : _themeMode;
       if (m['bgColor'] is int) _bgColor = Color(m['bgColor'] as int);
     });
   }
@@ -100,12 +102,14 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     });
   }
 
-  // ===== Stats =====
+  // ========= 統計 =========
   static const String _kStatsKey = 'reader_stats_v1';
+
   Future<void> _startSession() async {
     final now = DateTime.now().millisecondsSinceEpoch;
     _lastOpenTs = now;
-    final m = await CacheStore.readJson(_kStatsKey) ?? <String, dynamic>{'totalSeconds': 0};
+    final m = await CacheStore.readJson(_kStatsKey) ??
+        <String, dynamic>{'totalSeconds': 0};
     m['lastOpenTs'] = now;
     await CacheStore.writeJson(_kStatsKey, m);
   }
@@ -115,7 +119,8 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     if (_lastOpenTs == null) return;
     int addSec = ((now - _lastOpenTs!) / 1000).round();
     if (addSec < 0) addSec = 0;
-    final m = await CacheStore.readJson(_kStatsKey) ?? <String, dynamic>{'totalSeconds': 0};
+    final m = await CacheStore.readJson(_kStatsKey) ??
+        <String, dynamic>{'totalSeconds': 0};
     m['totalSeconds'] = (m['totalSeconds'] ?? 0) + addSec;
     m['lastOpenTs'] = now;
     await CacheStore.writeJson(_kStatsKey, m);
@@ -123,11 +128,12 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
   }
 
   Future<int> _getTotalSeconds() async {
-    final m = await CacheStore.readJson(_kStatsKey) ?? <String, dynamic>{'totalSeconds': 0};
+    final m = await CacheStore.readJson(_kStatsKey) ??
+        <String, dynamic>{'totalSeconds': 0};
     return (m['totalSeconds'] ?? 0) as int;
   }
 
-  // ===== Last-read per chapter =====
+  // ========= 續讀 =========
   String _lastPosKeyFor(String chapId) => 'last_pos_v1|chap=$chapId';
 
   Future<int?> _loadLastPageFor(String chapId) async {
@@ -143,42 +149,91 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     await CacheStore.writeJson(_lastPosKeyFor(chapId), {'pageIndex': pageIndex});
   }
 
-  // ===== Data helpers =====
+  // ========= 輔助 =========
   String _chapIdOf(dynamic rec) {
-    try { return (rec as dynamic).chapId as String; } catch (_) {}
+    try {
+      return (rec as dynamic).chapId as String;
+    } catch (_) {}
     if (rec is Map && rec['chapId'] is String) return rec['chapId'] as String;
     return rec.toString();
   }
+
   String _titleOf(dynamic rec, int index) {
-    try { final t = (rec as dynamic).title as String; if (t.isNotEmpty) return t; } catch (_) {}
+    try {
+      final t = (rec as dynamic).title as String;
+      if (t.isNotEmpty) return t;
+    } catch (_) {}
     if (rec is Map && rec['title'] is String) return rec['title'] as String;
     return '第 ${index + 1} 章';
   }
 
-  // ===== Chapter + pagination =====
+  /// 直接從 paragraphs 組章文（精準對你 DB）
+  Future<String> _readParagraphsText(String chapId) async {
+    try {
+      final db = (widget.dao as dynamic).db; // sqflite Database
+      final rows = await db.rawQuery(
+        'SELECT text FROM paragraphs WHERE chap_id = ? ORDER BY ord ASC',
+        [chapId],
+      );
+      if (rows.isEmpty) return '';
+      final buf = StringBuffer();
+      for (final r in rows) {
+        final line = (r['text'] ?? '').toString();
+        if (line.isNotEmpty) buf.writeln(line);
+      }
+      return buf.toString().trimRight();
+    } catch (e) {
+      debugPrint('[reader] read paragraphs error: $e');
+      return '';
+    }
+  }
+
+  // ========= 章載入 + 分頁 =========
   Future<void> _loadChapter(int index, {bool keepPage = false}) async {
     final chap = widget.fullChapters[index];
-    final chapId = _chapIdOf(chap);
+    final String chapId = _chapIdOf(chap);
 
-    String t = '';
-    try {
-      if (widget.dao != null && (widget.dao as dynamic).loadChapterText != null) {
-        final fn = (widget.dao as dynamic).loadChapterText;
-        t = await fn(chapId);
+    // 先用 paragraphs 正規路徑
+    String text = await _readParagraphsText(chapId);
+
+    // 備援（如未來換資料源）：呼叫 dao.loadChapterText / getChapterText
+    if (text.isEmpty) {
+      try {
+        final f = (widget.dao as dynamic).loadChapterText;
+        if (f is Function) {
+          text = await f(chapId);
+        }
+      } catch (_) {}
+      if (text.isEmpty) {
+        try {
+          final f = (widget.dao as dynamic).getChapterText;
+          if (f is Function) {
+            final r = await f(chapId);
+            if (r is String) text = r;
+          }
+        } catch (_) {}
       }
-    } catch (_) {}
+    }
 
-    final int initial = keepPage ? _pageIndex : (await _loadLastPageFor(chapId)) ?? 0;
+    final int initial =
+        keepPage ? _pageIndex : (await _loadLastPageFor(chapId)) ?? 0;
 
     if (!mounted) return;
     setState(() {
-      _text = t;
+      _text = text;
       _pageRanges = <TextRange>[];
       _pageIndex = 0;
       _pc = PageController(initialPage: 0);
     });
 
-    // After first layout we can paginate with concrete page size
+    if (_text.trim().isEmpty && mounted) {
+      final t = _titleOf(chap, index);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('讀不到內文：$t（$chapId）。請檢查 paragraphs 是否有資料。')),
+      );
+    }
+
+    // 有實際尺寸後做真實排版
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _ensurePaginationAndJump(initial);
     });
@@ -187,11 +242,13 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
   Future<void> _ensurePaginationAndJump(int initialPage) async {
     if (!mounted) return;
     final size = _lastPageSize;
-    if (size == Size.zero) return; // Will try again on next build/layout
+    if (size == Size.zero) return;
 
     final chap = widget.fullChapters[_idx];
     final chapId = _chapIdOf(chap);
-    final cacheKey = '$chapId|${_fontSize.toStringAsFixed(1)}|${_lineHeight.toStringAsFixed(2)}|${size.width.toStringAsFixed(0)}x${size.height.toStringAsFixed(0)}|${_pagePadding.toString()}';
+    final cacheKey =
+        '$chapId|${_fontSize.toStringAsFixed(1)}|${_lineHeight.toStringAsFixed(2)}|'
+        '${size.width.toStringAsFixed(0)}x${size.height.toStringAsFixed(0)}|${_pagePadding.toString()}';
 
     if (_paginationCache.containsKey(cacheKey)) {
       setState(() {
@@ -210,10 +267,11 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
           style: TextStyle(fontSize: _fontSize, height: _lineHeight),
           padding: _pagePadding,
         );
-        final pages = ts.paginate(size); // List<HPageRange>
-        ranges = pages.map((e) => TextRange(start: e.start, end: e.end)).toList();
-      } catch (_) {
-        // fallback: chunk by count so user still can read
+        final pages = ts.paginate(size); // List<HPageRange> (有 start/end)
+        ranges =
+            pages.map((e) => TextRange(start: e.start, end: e.end)).toList();
+      } catch (e) {
+        // 後備：字數切頁，避免 UI 斷掉
         ranges = _fallbackPaginate(_text, _fontSize);
       }
     }
@@ -244,14 +302,13 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
 
   Future<void> _openChapter(int newIndex) async {
     if (newIndex < 0 || newIndex >= widget.fullChapters.length) return;
-    // save current position
     final curChapId = _chapIdOf(widget.fullChapters[_idx]);
     await _saveLastPageFor(curChapId, _pageIndex);
     setState(() => _idx = newIndex);
     await _loadChapter(_idx);
   }
 
-  // ===== UI =====
+  // ========= UI =========
   @override
   Widget build(BuildContext context) {
     final theme = _resolveTheme(context);
@@ -259,7 +316,8 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
       data: theme,
       child: Scaffold(
         appBar: AppBar(
-          title: Text('章節 ${_idx + 1}（${_pageIndex + 1}/${_pageRanges.isEmpty ? 1 : _pageRanges.length}）'),
+          title: Text(
+              '章節 ${_idx + 1}（${_pageIndex + 1}/${_pageRanges.isEmpty ? 1 : _pageRanges.length}）'),
           actions: [
             IconButton(
               tooltip: '目錄',
@@ -298,11 +356,9 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
               });
             }
 
-            final bool noContent = _text.trim().isEmpty;
-            if (noContent) {
+            if (_text.trim().isEmpty) {
               return _buildEmptyContent();
             }
-
             if (_pageRanges.isEmpty) {
               return const Center(child: CircularProgressIndicator());
             }
@@ -332,9 +388,10 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
                       ),
                       padding: _pagePadding,
                       columnGap: 0,
-                      textColor: Theme.of(context).brightness == Brightness.dark
-                          ? Colors.white70
-                          : Colors.black87,
+                      textColor:
+                          Theme.of(context).brightness == Brightness.dark
+                              ? Colors.white70
+                              : Colors.black87,
                     ),
                     child: Container(color: _bgColor),
                   );
@@ -357,15 +414,11 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     final bool hasNext = _idx < widget.fullChapters.length - 1;
 
     if (v < -threshold) {
-      // right-to-left (next page) -> at last page, go next chapter
-      if (atLastPage && hasNext) {
-        await _openChapter(_idx + 1);
-      }
+      // 右→左，在最後一頁時切下一章
+      if (atLastPage && hasNext) await _openChapter(_idx + 1);
     } else if (v > threshold) {
-      // left-to-right (prev page) -> at first page, go prev chapter
-      if (atFirstPage && hasPrev) {
-        await _openChapter(_idx - 1);
-      }
+      // 左→右，在第一頁時切上一章
+      if (atFirstPage && hasPrev) await _openChapter(_idx - 1);
     }
   }
 
@@ -380,9 +433,11 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
           children: [
             const Icon(Icons.menu_book_outlined, size: 48),
             const SizedBox(height: 12),
-            Text('本章沒有可顯示的內容', style: Theme.of(context).textTheme.titleMedium),
+            Text('本章沒有可顯示的內容',
+                style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 6),
-            Text('章：$t（$id）', style: Theme.of(context).textTheme.bodySmall),
+            Text('章：$t（$id）',
+                style: Theme.of(context).textTheme.bodySmall),
             const SizedBox(height: 16),
             Wrap(
               spacing: 8,
@@ -407,13 +462,16 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
 
   ThemeData _resolveTheme(BuildContext context) {
     switch (_themeMode) {
-      case 1: return Theme.of(context).copyWith(brightness: Brightness.light);
-      case 2: return Theme.of(context).copyWith(brightness: Brightness.dark);
-      default: return Theme.of(context);
+      case 1:
+        return Theme.of(context).copyWith(brightness: Brightness.light);
+      case 2:
+        return Theme.of(context).copyWith(brightness: Brightness.dark);
+      default:
+        return Theme.of(context);
     }
   }
 
-  // ===== Catalog =====
+  // 目錄
   void _showCatalog() {
     showModalBottomSheet(
       context: context,
@@ -443,7 +501,7 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
     );
   }
 
-  // ===== Settings =====
+  // 外觀設定
   void _showSettingsSheet() {
     showModalBottomSheet(
       context: context,
@@ -533,7 +591,8 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
                           child: GestureDetector(
                             onTap: () => setSheet(() => localBg = c0),
                             child: Container(
-                              width: 28, height: 28,
+                              width: 28,
+                              height: 28,
                               decoration: BoxDecoration(
                                 color: c0,
                                 shape: BoxShape.circle,
@@ -559,7 +618,8 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
                       ElevatedButton(
                         onPressed: () {
                           Navigator.of(c).pop();
-                          final needRepaginate = localFont != _fontSize || localLine != _lineHeight;
+                          final needRepaginate = localFont != _fontSize ||
+                              localLine != _lineHeight;
                           setState(() {
                             _fontSize = localFont;
                             _themeMode = localMode;
