@@ -314,7 +314,7 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
             IconButton(
               tooltip: '外觀設定',
               icon: const Icon(Icons.palette_outlined),
-              onPressed: _showSettingsSheet,
+              onPressed: _showSettingsSheet, // <-- must exist
             ),
           ],
         ),
@@ -449,6 +449,129 @@ class _SutraReaderPageState extends State<SutraReaderPage> with WidgetsBindingOb
             },
           );
         }
+      },
+    );
+  }
+
+  // ===== Settings Sheet (外觀設定) =====
+  void _showSettingsSheet() {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (c) {
+        double localFont = _fontSize;
+        int localMode = _themeMode;
+        Color localBg = _bgColor;
+        return StatefulBuilder(
+          builder: (c, setSheet) {
+            return Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('外觀設定', style: Theme.of(c).textTheme.titleMedium),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const Text('字體大小'),
+                      Expanded(
+                        child: Slider(
+                          value: localFont,
+                          min: 12,
+                          max: 28,
+                          divisions: 16,
+                          label: '${localFont.toStringAsFixed(0)}',
+                          onChanged: (v) => setSheet(() => localFont = v),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Text('主題'),
+                      const SizedBox(width: 12),
+                      ChoiceChip(
+                        label: const Text('跟隨系統'),
+                        selected: localMode == 0,
+                        onSelected: (_) => setSheet(() => localMode = 0),
+                      ),
+                      const SizedBox(width: 8),
+                      ChoiceChip(
+                        label: const Text('日間'),
+                        selected: localMode == 1,
+                        onSelected: (_) => setSheet(() => localMode = 1),
+                      ),
+                      const SizedBox(width: 8),
+                      ChoiceChip(
+                        label: const Text('夜間'),
+                        selected: localMode == 2,
+                        onSelected: (_) => setSheet(() => localMode = 2),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const Text('背景色'),
+                      const SizedBox(width: 12),
+                      for (final c0 in <Color>[
+                        const Color(0xFFFAF6EF),
+                        Colors.white,
+                        const Color(0xFF121212),
+                        const Color(0xFFFFF8E1),
+                      ])
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: GestureDetector(
+                            onTap: () => setSheet(() => localBg = c0),
+                            child: Container(
+                              width: 28, height: 28,
+                              decoration: BoxDecoration(
+                                color: c0,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.black12),
+                              ),
+                              child: localBg.value == c0.value
+                                  ? const Icon(Icons.check, size: 18)
+                                  : null,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(c).pop(),
+                        child: const Text('取消'),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton(
+                        onPressed: () {
+                          Navigator.of(c).pop();
+                          setState(() {
+                            _fontSize = localFont;
+                            _themeMode = localMode;
+                            _bgColor = localBg;
+                            _paginate();
+                            final cur = _pageIndex.clamp(0, _pages.length - 1);
+                            _pc = PageController(initialPage: cur);
+                          });
+                          _savePrefs();
+                        },
+                        child: const Text('套用'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
       },
     );
   }
